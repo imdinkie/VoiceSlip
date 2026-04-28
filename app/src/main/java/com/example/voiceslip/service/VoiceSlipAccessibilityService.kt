@@ -320,7 +320,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             return
         }
         val id = UUID.randomUUID().toString()
-        val file = File(repository.recordingsDir, "$id.m4a")
+        val file = File(repository.recordingsDir, "$id.wav")
         runCatching {
             recorder.start(file)
             haptic()

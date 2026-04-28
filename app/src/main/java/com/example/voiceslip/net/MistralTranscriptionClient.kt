@@ -32,7 +32,7 @@ class MistralTranscriptionClient {
             contextBias.take(100).forEach { phrase ->
                 out.writeFormField(boundary, "context_bias", phrase)
             }
-            out.writeFileField(boundary, "file", audioFile.name, "audio/mp4", audioFile)
+            out.writeFileField(boundary, "file", audioFile.name, audioMimeType(audioFile), audioFile)
             out.write("--$boundary--\r\n".toByteArray())
         }
 
@@ -153,7 +153,7 @@ class MistralTranscriptionClient {
         connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
         BufferedOutputStream(connection.outputStream).use { out ->
             out.writeFormField(boundary, "purpose", "audio")
-            out.writeFileField(boundary, "file", audioFile.name, "audio/mp4", audioFile)
+            out.writeFileField(boundary, "file", audioFile.name, audioMimeType(audioFile), audioFile)
             out.write("--$boundary--\r\n".toByteArray())
         }
         val responseCode = connection.responseCode
@@ -270,4 +270,11 @@ internal fun styleInstruction(stylePreset: StylePreset): String = when (stylePre
     StylePreset.CASUAL -> "Make it natural and casual without changing facts."
     StylePreset.FORMAL -> "Make it polished and professional without changing facts."
     StylePreset.EXCITED -> "Make it energetic without changing facts."
+}
+
+internal fun audioMimeType(file: File): String = when (file.extension.lowercase()) {
+    "wav" -> "audio/wav"
+    "mp3" -> "audio/mpeg"
+    "m4a", "mp4" -> "audio/mp4"
+    else -> "application/octet-stream"
 }

@@ -36,7 +36,7 @@ class GroqClient {
                     "Prefer these spellings when they match the audio: ${dictionaryTerms.take(100).joinToString(", ")}"
                 )
             }
-            out.writeFileField(boundary, "file", audioFile.name, "audio/mp4", audioFile)
+            out.writeFileField(boundary, "file", audioFile.name, audioMimeType(audioFile), audioFile)
             out.write("--$boundary--\r\n".toByteArray())
         }
 
