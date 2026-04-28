@@ -86,11 +86,11 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.packageName == packageName) {
             if (activeApplicationPackage() == packageName) {
-                scheduleOverlayRefresh(delayMillis = 80)
+                refreshOverlayVisibility()
             }
             return
         }
-        scheduleOverlayRefresh(delayMillis = 80)
+        refreshOverlayVisibility()
     }
 
     override fun onInterrupt() {
@@ -98,31 +98,9 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         hideOverlay()
     }
 
-    private val refreshRunnable = Runnable { refreshOverlayVisibility() }
-    private val showRunnable = Runnable {
-        if (!recorder.isRecording && shouldShowBubble()) showOverlay(expanded = false)
-    }
-    private val hideRunnable = Runnable {
-        if (!recorder.isRecording && !shouldShowBubble()) hideOverlay()
-    }
-
-    private fun scheduleOverlayRefresh(delayMillis: Long) {
-        mainHandler.removeCallbacks(refreshRunnable)
-        mainHandler.postDelayed(refreshRunnable, delayMillis)
-    }
-
     private fun refreshOverlayVisibility() {
         if (recorder.isRecording) return
-        val shouldShow = shouldShowBubble()
-        if (shouldShow) {
-            mainHandler.removeCallbacks(hideRunnable)
-            mainHandler.removeCallbacks(showRunnable)
-            mainHandler.postDelayed(showRunnable, SHOW_DEBOUNCE_MS)
-        } else {
-            mainHandler.removeCallbacks(showRunnable)
-            mainHandler.removeCallbacks(hideRunnable)
-            mainHandler.postDelayed(hideRunnable, HIDE_DEBOUNCE_MS)
-        }
+        if (shouldShowBubble()) showOverlay(expanded = false) else hideOverlay()
     }
 
     private fun shouldShowBubble(): Boolean {
@@ -177,8 +155,6 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 
     private fun showOverlay(expanded: Boolean) {
-        mainHandler.removeCallbacks(showRunnable)
-        mainHandler.removeCallbacks(hideRunnable)
         overlayExpanded = expanded
         val existing = overlay
         if (existing != null) {
@@ -272,8 +248,6 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 
     private fun hideOverlay() {
-        mainHandler.removeCallbacks(showRunnable)
-        mainHandler.removeCallbacks(hideRunnable)
         val view = overlay ?: return
         overlay = null
         overlayParams = null
@@ -466,8 +440,6 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val MAX_RECORDING_MS = 5 * 60 * 1000L
-        private const val SHOW_DEBOUNCE_MS = 250L
-        private const val HIDE_DEBOUNCE_MS = 500L
         var instance: VoiceSlipAccessibilityService? = null
             private set
     }
@@ -658,16 +630,16 @@ private class WaveformView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(28, 24, 32)
         strokeCap = Paint.Cap.ROUND
-        strokeWidth = 7f * resources.displayMetrics.density
+        strokeWidth = 4f * resources.displayMetrics.density
         textAlign = Paint.Align.CENTER
         textSize = 15f * resources.displayMetrics.density
     }
-    private var level = 0.1f
+    private var level = 0.02f
     private var countdown: Int? = null
     private var transcribing = false
 
     fun setAmplitude(amplitude: Int, countdownSeconds: Int?) {
-        level = min(1f, max(0.08f, amplitude / 32767f))
+        level = min(1f, max(0.02f, amplitude / 32767f))
         countdown = countdownSeconds
         invalidate()
     }
@@ -689,11 +661,11 @@ private class WaveformView(context: Context) : View(context) {
             return
         }
         val centerY = height / 2f
-        val bars = 9
+        val bars = 11
         val gap = width / (bars + 1f)
         for (i in 1..bars) {
             val phase = if (i % 2 == 0) 0.55f else 1f
-            val barHeight = (height * 0.16f) + (height * 0.55f * level * phase)
+            val barHeight = (height * 0.06f) + (height * 0.42f * level * phase)
             val x = gap * i
             canvas.drawLine(x, centerY - barHeight / 2f, x, centerY + barHeight / 2f, paint)
         }
