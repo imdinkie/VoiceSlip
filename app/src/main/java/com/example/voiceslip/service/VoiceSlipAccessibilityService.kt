@@ -2,6 +2,7 @@ package com.example.voiceslip.service
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.InputMethod
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -12,11 +13,14 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.text.InputType
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -25,6 +29,8 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.TextAttribute
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -57,6 +63,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     private var overlayExpanded = false
     private var compactAnchorX = -1
     private var compactAnchorY = -1
+    private var accessibilityInputMethod: VoiceSlipInputMethod? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -78,6 +85,10 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         recorder.cancel()
         hideOverlay()
         if (instance === this) instance = null
+    }
+
+    override fun onCreateInputMethod(): InputMethod {
+        return VoiceSlipInputMethod(this).also { accessibilityInputMethod = it }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -151,9 +162,18 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
 
     private fun isSensitiveNode(node: AccessibilityNodeInfo): Boolean {
         if (node.isPassword) return true
+        if (isSensitiveInputType(node.inputType)) return true
         val text = "${node.text?.toString().orEmpty()} ${node.hintText?.toString().orEmpty()} ${node.contentDescription?.toString().orEmpty()}".lowercase()
         val sensitiveTerms = listOf("password", "passcode", "pin", "otp", "one-time", "credit card", "card number", "cvv", "cvc")
         return sensitiveTerms.any { it in text }
+    }
+
+    private fun isSensitiveInputType(inputType: Int): Boolean {
+        val variation = inputType and InputType.TYPE_MASK_VARIATION
+        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+            variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
     }
 
     private fun showOverlay(expanded: Boolean) {
@@ -392,14 +412,14 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 val dictionary = repository.listDictionary().map { it.phrase }
                 val pipeline = PipelineExecutor { secretStore.getApiKey(it) }.execute(config, result.file, dictionary)
                 val text = pipeline.finalText
-                val inserted = mainHandler.postAndWait { insertOrCopy(text) }
+                val insertionResult = mainHandler.postAndWait { insertOrCopy(text) }
                 item.copy(
                     status = RecordingStatus.SUCCEEDED,
                     transcript = text,
                     rawTranscript = pipeline.rawTranscript,
                     finalText = pipeline.finalText,
                     detectedLanguage = pipeline.detectedLanguage,
-                    error = if (inserted) null else "Copied to clipboard because no editable field was available.",
+                    error = insertionResult.historyNote,
                     provider = pipeline.provider,
                     model = pipeline.model,
                     pipelineMode = config.mode.name,
@@ -411,7 +431,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     postProcessingModel = pipeline.postProcessingModel,
                     stylePreset = pipeline.stylePreset,
                     pipelineSummary = pipeline.pipelineSummary,
-                    errorStage = if (inserted) null else "clipboard_fallback",
+                    errorStage = insertionResult.errorStage,
                     metadataJson = pipeline.metadataJson
                 )
             }.getOrElse { error ->
@@ -425,7 +445,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             mainHandler.post {
                 currentItem = null
                 if (updated.status == RecordingStatus.SUCCEEDED) {
-                    toast(if (updated.error == null) "Inserted transcription" else "Copied transcription")
+                    toast(insertionToast(updated.errorStage))
                 } else {
                     toast("Transcription failed. Open VoiceSlip to retry.")
                 }
@@ -434,15 +454,80 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }.start()
     }
 
-    private fun insertOrCopy(text: String): Boolean {
+    private fun insertOrCopy(text: String): InsertionResult {
+        val node = findFocusedEditableNode()
+        if (node != null && isSensitiveNode(node)) {
+            Log.d(TAG, "Insertion blocked: sensitive accessibility node")
+            return InsertionResult.FAILED_SENSITIVE_FIELD
+        }
+
+        accessibilityInputMethod?.let { inputMethod ->
+            if (inputMethod.isSensitiveEditor()) {
+                Log.d(TAG, "Insertion blocked: sensitive input editor")
+                return InsertionResult.FAILED_SENSITIVE_FIELD
+            }
+            if (inputMethod.commitText(text)) {
+                Log.d(TAG, "Insertion succeeded via accessibility input method")
+                return InsertionResult.INSERTED_VIA_INPUT_METHOD
+            }
+        }
+
+        if (node == null || !hasInputMethodWindow()) {
+            copyToClipboard(text)
+            Log.d(TAG, "Insertion copied to clipboard: no target node or input method window")
+            return InsertionResult.COPIED_NO_TARGET
+        }
+
+        if (insertDirectly(node, text)) {
+            Log.d(TAG, "Insertion succeeded via ACTION_SET_TEXT")
+            return InsertionResult.INSERTED_DIRECT
+        }
+
+        if (node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+            copyToClipboard(text)
+            if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+                Log.d(TAG, "Insertion succeeded via clipboard paste fallback")
+                return InsertionResult.INSERTED_VIA_CLIPBOARD
+            }
+        }
+
+        Log.d(TAG, "Insertion failed")
+        return InsertionResult.FAILED_INSERTION
+    }
+
+    private fun insertDirectly(node: AccessibilityNodeInfo, text: String): Boolean {
+        if (!node.supportsAction(AccessibilityNodeInfo.ACTION_SET_TEXT)) return false
+        val currentText = node.text?.toString() ?: return false
+        val selectionStart = node.textSelectionStart
+        val selectionEnd = node.textSelectionEnd
+        if (selectionStart < 0 || selectionEnd < 0) return false
+
+        val start = min(selectionStart, selectionEnd).coerceIn(0, currentText.length)
+        val end = max(selectionStart, selectionEnd).coerceIn(0, currentText.length)
+        val updatedText = currentText.substring(0, start) + text + currentText.substring(end)
+        val arguments = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, updatedText)
+        }
+        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+    }
+
+    private fun AccessibilityNodeInfo.supportsAction(actionId: Int): Boolean {
+        return actionList.any { it.id == actionId }
+    }
+
+    private fun copyToClipboard(text: String) {
         val clipboard = getSystemService(ClipboardManager::class.java)
         clipboard.setPrimaryClip(ClipData.newPlainText("VoiceSlip transcription", text))
-        val node = findFocusedEditableNode()
-        if (node == null || isSensitiveNode(node)) return false
-        if (node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_PASTE }) {
-            return node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+    }
+
+    private fun insertionToast(errorStage: String?): String {
+        return when (errorStage) {
+            null -> "Inserted transcription"
+            "clipboard_fallback" -> "Inserted transcription using clipboard fallback"
+            "no_editable_target" -> "Copied transcription"
+            "sensitive_field" -> "Cannot insert into sensitive fields"
+            else -> "Could not insert transcription"
         }
-        return false
     }
 
     private fun haptic() {
@@ -465,6 +550,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val MAX_RECORDING_MS = 5 * 60 * 1000L
+        private const val TAG = "VoiceSlip"
         var instance: VoiceSlipAccessibilityService? = null
             private set
     }
@@ -479,11 +565,11 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 }
 
-private fun Handler.postAndWait(block: () -> Boolean): Boolean {
+private fun <T> Handler.postAndWait(block: () -> T): T {
     if (Looper.myLooper() == Looper.getMainLooper()) return block()
     val lock = Object()
     var complete = false
-    var result = false
+    var result: T? = null
     post {
         result = block()
         synchronized(lock) {
@@ -494,7 +580,54 @@ private fun Handler.postAndWait(block: () -> Boolean): Boolean {
     synchronized(lock) {
         while (!complete) lock.wait(5000)
     }
-    return result
+    @Suppress("UNCHECKED_CAST")
+    return result as T
+}
+
+private enum class InsertionResult(
+    val historyNote: String?,
+    val errorStage: String?
+) {
+    INSERTED_DIRECT(null, null),
+    INSERTED_VIA_INPUT_METHOD(null, null),
+    INSERTED_VIA_CLIPBOARD("Inserted using clipboard paste fallback because direct insertion was unavailable.", "clipboard_fallback"),
+    COPIED_NO_TARGET("Copied to clipboard because no editable field was available.", "no_editable_target"),
+    FAILED_SENSITIVE_FIELD("Did not insert or copy because the focused field appears sensitive.", "sensitive_field"),
+    FAILED_INSERTION("Could not insert into the focused field.", "insertion_failed")
+}
+
+private class VoiceSlipInputMethod(service: VoiceSlipAccessibilityService) : InputMethod(service) {
+    fun commitText(text: String): Boolean {
+        if (!currentInputStarted) return false
+        val connection = currentInputConnection ?: return false
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                connection.commitText(text, 1, null as TextAttribute?)
+            } else {
+                @Suppress("DEPRECATION")
+                connection.commitText(text, 1, null)
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    fun isSensitiveEditor(): Boolean {
+        val editorInfo = currentInputEditorInfo ?: return false
+        return editorInfo.inputType.isSensitiveInputType() ||
+            editorInfo.imeOptions.hasPrivateImeFlag()
+    }
+
+    private fun Int.isSensitiveInputType(): Boolean {
+        val variation = this and InputType.TYPE_MASK_VARIATION
+        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+            variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+    }
+
+    private fun Int.hasPrivateImeFlag(): Boolean {
+        return this and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
+    }
 }
 
 private enum class RecordingUiState {
