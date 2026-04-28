@@ -35,6 +35,50 @@ class VoiceSlipRepository(context: Context) {
         prefs.edit().putInt("bubble_x", x).putInt("bubble_y", y).apply()
     }
 
+    fun getPipelineConfig(): PipelineConfig {
+        return PipelineConfig(
+            mode = enumValue(prefs.getString("pipeline_mode", null), PipelineMode.PURE_TRANSCRIPTION),
+            transcriptionEngine = enumValue(
+                prefs.getString("transcription_engine", null),
+                TranscriptionEngineId.MISTRAL_VOXTRAL_MINI_TRANSCRIBE
+            ),
+            audioDirectEngine = enumValue(
+                prefs.getString("audio_direct_engine", null),
+                AudioDirectEngineId.MISTRAL_VOXTRAL_SMALL_AUDIO
+            ),
+            postProcessingProvider = enumValue(
+                prefs.getString("post_processing_provider", null),
+                PostProcessingProvider.NONE
+            ),
+            postProcessingModel = prefs.getString("post_processing_model", "").orEmpty(),
+            stylePreset = enumValue(prefs.getString("style_preset", null), StylePreset.RAW)
+        )
+    }
+
+    fun setPipelineConfig(config: PipelineConfig) {
+        prefs.edit()
+            .putString("pipeline_mode", config.mode.name)
+            .putString("transcription_engine", config.transcriptionEngine.name)
+            .putString("audio_direct_engine", config.audioDirectEngine.name)
+            .putString("post_processing_provider", config.postProcessingProvider.name)
+            .putString("post_processing_model", config.postProcessingModel)
+            .putString("style_preset", config.stylePreset.name)
+            .apply()
+    }
+
+    fun getCachedModels(provider: ProviderId): List<ModelOption> {
+        val array = JSONArray(prefs.getString("${provider.name.lowercase()}_models", "[]"))
+        return (0 until array.length()).mapNotNull { index ->
+            runCatching { array.getJSONObject(index).toModelOption() }.getOrNull()
+        }.sortedBy { it.name.lowercase() }
+    }
+
+    fun setCachedModels(provider: ProviderId, models: List<ModelOption>) {
+        val array = JSONArray()
+        models.forEach { array.put(it.toJson()) }
+        prefs.edit().putString("${provider.name.lowercase()}_models", array.toString()).apply()
+    }
+
     fun listDictionary(): List<DictionaryEntry> {
         val array = JSONArray(prefs.getString("dictionary", "[]"))
         return (0 until array.length()).mapNotNull { index ->
@@ -113,9 +157,23 @@ private fun HistoryItem.toJson(): JSONObject = JSONObject()
     .put("durationMillis", durationMillis)
     .put("status", status.name)
     .put("transcript", transcript)
+    .put("rawTranscript", rawTranscript)
+    .put("finalText", finalText)
+    .put("detectedLanguage", detectedLanguage)
     .put("error", error)
     .put("provider", provider)
     .put("model", model)
+    .put("pipelineMode", pipelineMode)
+    .put("transcriptionProvider", transcriptionProvider)
+    .put("transcriptionModel", transcriptionModel)
+    .put("audioModelProvider", audioModelProvider)
+    .put("audioModel", audioModel)
+    .put("postProcessingProvider", postProcessingProvider)
+    .put("postProcessingModel", postProcessingModel)
+    .put("stylePreset", stylePreset)
+    .put("pipelineSummary", pipelineSummary)
+    .put("errorStage", errorStage)
+    .put("metadataJson", metadataJson)
     .put("retryCount", retryCount)
 
 private fun JSONObject.toHistoryItem(): HistoryItem = HistoryItem(
@@ -125,8 +183,40 @@ private fun JSONObject.toHistoryItem(): HistoryItem = HistoryItem(
     durationMillis = optLong("durationMillis", 0L),
     status = runCatching { RecordingStatus.valueOf(getString("status")) }.getOrDefault(RecordingStatus.FAILED),
     transcript = optString("transcript").ifBlank { null },
+    rawTranscript = optString("rawTranscript").ifBlank { optString("transcript").ifBlank { null } },
+    finalText = optString("finalText").ifBlank { optString("transcript").ifBlank { null } },
+    detectedLanguage = optString("detectedLanguage").ifBlank { null },
     error = optString("error").ifBlank { null },
     provider = optString("provider", "mistral"),
     model = optString("model", "voxtral-mini-latest"),
+    pipelineMode = optString("pipelineMode", PipelineMode.PURE_TRANSCRIPTION.name),
+    transcriptionProvider = optString("transcriptionProvider").ifBlank { null },
+    transcriptionModel = optString("transcriptionModel").ifBlank { null },
+    audioModelProvider = optString("audioModelProvider").ifBlank { null },
+    audioModel = optString("audioModel").ifBlank { null },
+    postProcessingProvider = optString("postProcessingProvider").ifBlank { null },
+    postProcessingModel = optString("postProcessingModel").ifBlank { null },
+    stylePreset = optString("stylePreset", StylePreset.RAW.name),
+    pipelineSummary = optString("pipelineSummary").ifBlank { null },
+    errorStage = optString("errorStage").ifBlank { null },
+    metadataJson = optString("metadataJson").ifBlank { null },
     retryCount = optInt("retryCount", 0)
 )
+
+private fun ModelOption.toJson(): JSONObject = JSONObject()
+    .put("id", id)
+    .put("name", name)
+    .put("provider", provider)
+    .put("contextLength", contextLength)
+
+private fun JSONObject.toModelOption(): ModelOption = ModelOption(
+    id = getString("id"),
+    name = optString("name", getString("id")),
+    provider = optString("provider"),
+    contextLength = if (has("contextLength") && !isNull("contextLength")) optInt("contextLength") else null
+)
+
+private inline fun <reified T : Enum<T>> enumValue(name: String?, default: T): T {
+    if (name.isNullOrBlank()) return default
+    return runCatching { enumValueOf<T>(name) }.getOrDefault(default)
+}

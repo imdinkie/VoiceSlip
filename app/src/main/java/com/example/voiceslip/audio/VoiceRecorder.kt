@@ -64,4 +64,3 @@ data class RecordingResult(
     val file: File,
     val durationMillis: Long
 )
-

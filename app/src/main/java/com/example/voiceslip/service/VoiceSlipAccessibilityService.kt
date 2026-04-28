@@ -31,10 +31,12 @@ import android.widget.TextView
 import android.widget.Toast
 import com.example.voiceslip.audio.VoiceRecorder
 import com.example.voiceslip.data.HistoryItem
+import com.example.voiceslip.data.PipelineMode
 import com.example.voiceslip.data.RecordingStatus
 import com.example.voiceslip.data.SecretStore
 import com.example.voiceslip.data.VoiceSlipRepository
-import com.example.voiceslip.net.MistralTranscriptionClient
+import com.example.voiceslip.net.PipelineException
+import com.example.voiceslip.net.PipelineExecutor
 import java.io.File
 import java.util.UUID
 import kotlin.math.abs
@@ -309,8 +311,12 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             toast("Microphone permission is required")
             return
         }
-        if (secretStore.getMistralApiKey().isNullOrBlank()) {
-            toast("Add your Mistral API key in VoiceSlip")
+        val config = repository.getPipelineConfig()
+        val validation = runCatching {
+            PipelineExecutor { secretStore.getApiKey(it) }.validate(config)
+        }.exceptionOrNull()
+        if (validation != null) {
+            toast(validation.message ?: "Complete model setup in VoiceSlip")
             return
         }
         val id = UUID.randomUUID().toString()
@@ -324,7 +330,10 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 createdAtMillis = recordingStartedAt,
                 audioPath = file.absolutePath,
                 durationMillis = 0L,
-                status = RecordingStatus.RECORDING
+                status = RecordingStatus.RECORDING,
+                pipelineMode = config.mode.name,
+                stylePreset = config.stylePreset.name,
+                pipelineSummary = pipelineSummary(config)
             ).also { repository.upsertHistory(it) }
             showOverlay(expanded = true)
             overlay?.setRecordingState(RecordingUiState.RECORDING)
@@ -379,21 +388,37 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         overlay?.setRecordingState(RecordingUiState.TRANSCRIBING)
         Thread {
             val updated = runCatching {
-                val apiKey = secretStore.getMistralApiKey().orEmpty()
+                val config = repository.getPipelineConfig()
                 val dictionary = repository.listDictionary().map { it.phrase }
-                val transcription = MistralTranscriptionClient().transcribe(apiKey, result.file, dictionary)
-                val text = transcription.text
+                val pipeline = PipelineExecutor { secretStore.getApiKey(it) }.execute(config, result.file, dictionary)
+                val text = pipeline.finalText
                 val inserted = mainHandler.postAndWait { insertOrCopy(text) }
                 item.copy(
                     status = RecordingStatus.SUCCEEDED,
                     transcript = text,
+                    rawTranscript = pipeline.rawTranscript,
+                    finalText = pipeline.finalText,
+                    detectedLanguage = pipeline.detectedLanguage,
                     error = if (inserted) null else "Copied to clipboard because no editable field was available.",
-                    model = transcription.model
+                    provider = pipeline.provider,
+                    model = pipeline.model,
+                    pipelineMode = config.mode.name,
+                    transcriptionProvider = pipeline.transcriptionProvider,
+                    transcriptionModel = pipeline.transcriptionModel,
+                    audioModelProvider = pipeline.audioModelProvider,
+                    audioModel = pipeline.audioModel,
+                    postProcessingProvider = pipeline.postProcessingProvider,
+                    postProcessingModel = pipeline.postProcessingModel,
+                    stylePreset = pipeline.stylePreset,
+                    pipelineSummary = pipeline.pipelineSummary,
+                    errorStage = if (inserted) null else "clipboard_fallback",
+                    metadataJson = pipeline.metadataJson
                 )
             }.getOrElse { error ->
                 item.copy(
                     status = RecordingStatus.FAILED,
-                    error = error.message ?: error::class.java.simpleName
+                    error = error.message ?: error::class.java.simpleName,
+                    errorStage = (error as? PipelineException)?.stage ?: "pipeline"
                 )
             }
             repository.upsertHistory(updated)
@@ -442,6 +467,15 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         private const val MAX_RECORDING_MS = 5 * 60 * 1000L
         var instance: VoiceSlipAccessibilityService? = null
             private set
+    }
+
+    private fun pipelineSummary(config: com.example.voiceslip.data.PipelineConfig): String {
+        return when (config.mode) {
+            PipelineMode.PURE_TRANSCRIPTION -> config.transcriptionEngine.displayName
+            PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ->
+                "${config.transcriptionEngine.displayName} -> ${config.postProcessingProvider.label} ${config.postProcessingModel}"
+            PipelineMode.AUDIO_DIRECT -> "${config.audioDirectEngine.displayName} direct"
+        }
     }
 }
 

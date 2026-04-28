@@ -20,8 +20,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,7 +33,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -68,10 +73,21 @@ import androidx.lifecycle.LifecycleOwner
 import com.example.voiceslip.data.BubbleSize
 import com.example.voiceslip.data.DictionaryEntry
 import com.example.voiceslip.data.HistoryItem
+import com.example.voiceslip.data.ModelOption
+import com.example.voiceslip.data.PipelineConfig
+import com.example.voiceslip.data.PipelineMode
+import com.example.voiceslip.data.PostProcessingProvider
+import com.example.voiceslip.data.ProviderId
 import com.example.voiceslip.data.RecordingStatus
 import com.example.voiceslip.data.SecretStore
+import com.example.voiceslip.data.StylePreset
+import com.example.voiceslip.data.TranscriptionEngineId
+import com.example.voiceslip.data.AudioDirectEngineId
 import com.example.voiceslip.data.VoiceSlipRepository
-import com.example.voiceslip.net.MistralTranscriptionClient
+import com.example.voiceslip.net.GroqClient
+import com.example.voiceslip.net.OpenRouterClient
+import com.example.voiceslip.net.PipelineException
+import com.example.voiceslip.net.PipelineExecutor
 import com.example.voiceslip.ui.theme.VoiceSlipTheme
 import java.io.File
 import java.util.Date
@@ -113,27 +129,42 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun retryTranscription(item: HistoryItem) {
-        val apiKey = secretStore.getMistralApiKey()
-        if (apiKey.isNullOrBlank()) return
+        val config = repository.getPipelineConfig()
         repository.upsertHistory(item.copy(status = RecordingStatus.TRANSCRIBING, error = null))
         Thread {
             val updated = runCatching {
-                val result = MistralTranscriptionClient().transcribe(
-                    apiKey = apiKey,
+                val result = PipelineExecutor { secretStore.getApiKey(it) }.execute(
+                    config = config,
                     audioFile = File(item.audioPath),
-                    contextBias = repository.listDictionary().map { it.phrase }
+                    dictionaryTerms = repository.listDictionary().map { it.phrase }
                 )
                 item.copy(
                     status = RecordingStatus.SUCCEEDED,
-                    transcript = result.text,
+                    transcript = result.finalText,
+                    rawTranscript = result.rawTranscript,
+                    finalText = result.finalText,
+                    detectedLanguage = result.detectedLanguage,
                     error = null,
+                    provider = result.provider,
                     model = result.model,
+                    pipelineMode = config.mode.name,
+                    transcriptionProvider = result.transcriptionProvider,
+                    transcriptionModel = result.transcriptionModel,
+                    audioModelProvider = result.audioModelProvider,
+                    audioModel = result.audioModel,
+                    postProcessingProvider = result.postProcessingProvider,
+                    postProcessingModel = result.postProcessingModel,
+                    stylePreset = result.stylePreset,
+                    pipelineSummary = result.pipelineSummary,
+                    errorStage = null,
+                    metadataJson = result.metadataJson,
                     retryCount = item.retryCount + 1
                 )
             }.getOrElse {
                 item.copy(
                     status = RecordingStatus.FAILED,
                     error = it.message ?: it::class.java.simpleName,
+                    errorStage = (it as? PipelineException)?.stage ?: "pipeline",
                     retryCount = item.retryCount + 1
                 )
             }
@@ -160,7 +191,13 @@ private fun VoiceSlipApp(
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
     var refreshTick by remember { mutableIntStateOf(0) }
-    var apiKey by remember { mutableStateOf(secretStore.getMistralApiKey().orEmpty()) }
+    var mistralKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.MISTRAL).orEmpty()) }
+    var groqKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.GROQ).orEmpty()) }
+    var openRouterKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
+    var pipelineConfig by remember { mutableStateOf(repository.getPipelineConfig()) }
+    var groqModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.GROQ)) }
+    var openRouterModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.OPENROUTER)) }
+    var modelStatus by remember { mutableStateOf<String?>(null) }
     var haptics by remember { mutableStateOf(repository.getHapticsEnabled()) }
     var bubbleSize by remember { mutableStateOf(repository.getBubbleSize()) }
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -171,7 +208,12 @@ private fun VoiceSlipApp(
     }
 
     LaunchedEffect(refreshTick) {
-        apiKey = secretStore.getMistralApiKey().orEmpty()
+        mistralKey = secretStore.getApiKey(ProviderId.MISTRAL).orEmpty()
+        groqKey = secretStore.getApiKey(ProviderId.GROQ).orEmpty()
+        openRouterKey = secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()
+        pipelineConfig = repository.getPipelineConfig()
+        groqModels = repository.getCachedModels(ProviderId.GROQ)
+        openRouterModels = repository.getCachedModels(ProviderId.OPENROUTER)
         haptics = repository.getHapticsEnabled()
         bubbleSize = repository.getBubbleSize()
     }
@@ -185,7 +227,17 @@ private fun VoiceSlipApp(
             lifecycleOwner?.lifecycle?.removeObserver(observer)
         }
     }
-    val setupStatus = remember(refreshTick, apiKey) { currentSetupStatus(context, apiKey) }
+    val setupStatus = remember(refreshTick, mistralKey, groqKey, openRouterKey, pipelineConfig) {
+        currentSetupStatus(
+            context = context,
+            config = pipelineConfig,
+            keys = mapOf(
+                ProviderId.MISTRAL to mistralKey,
+                ProviderId.GROQ to groqKey,
+                ProviderId.OPENROUTER to openRouterKey
+            )
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -210,7 +262,7 @@ private fun VoiceSlipApp(
                     StatusPill(if (setupStatus.ready) "Ready" else "Setup")
                 }
                 TabRow(selectedTabIndex = selectedTab) {
-                    listOf("Setup", "Dictionary", "History").forEachIndexed { index, title ->
+                    listOf("Setup", "Models", "Dictionary", "History").forEachIndexed { index, title ->
                         Tab(
                             selected = selectedTab == index,
                             onClick = { selectedTab = index },
@@ -224,13 +276,19 @@ private fun VoiceSlipApp(
         Surface(Modifier.fillMaxSize().padding(padding)) {
             when (selectedTab) {
                 0 -> SetupScreen(
-                    apiKey = apiKey,
+                    mistralKey = mistralKey,
+                    groqKey = groqKey,
+                    openRouterKey = openRouterKey,
                     haptics = haptics,
                     bubbleSize = bubbleSize,
                     setupStatus = setupStatus,
-                    onApiKeyChange = {
-                        apiKey = it
-                        secretStore.saveMistralApiKey(it)
+                    onProviderKeyChange = { provider, key ->
+                        when (provider) {
+                            ProviderId.MISTRAL -> mistralKey = key
+                            ProviderId.GROQ -> groqKey = key
+                            ProviderId.OPENROUTER -> openRouterKey = key
+                        }
+                        secretStore.saveApiKey(provider, key)
                     },
                     onHapticsChange = {
                         haptics = it
@@ -247,8 +305,51 @@ private fun VoiceSlipApp(
                         if (Build.VERSION.SDK_INT >= 33) notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
                 )
-                1 -> DictionaryScreen(repository = repository)
-                2 -> HistoryScreen(repository = repository, onRetry = onRetry, onCopy = onCopy)
+                1 -> ModelsScreen(
+                    config = pipelineConfig,
+                    groqModels = groqModels,
+                    openRouterModels = openRouterModels,
+                    modelStatus = modelStatus,
+                    hasGroqKey = groqKey.isNotBlank(),
+                    hasOpenRouterKey = openRouterKey.isNotBlank(),
+                    onConfigChange = {
+                        pipelineConfig = it
+                        repository.setPipelineConfig(it)
+                        refreshTick++
+                    },
+                    onRefreshGroq = {
+                        modelStatus = "Refreshing Groq models..."
+                        Thread {
+                            val result = runCatching { GroqClient().listModels(secretStore.getApiKey(ProviderId.GROQ).orEmpty()) }
+                            result.onSuccess { repository.setCachedModels(ProviderId.GROQ, it) }
+                            val message = result.fold(
+                                onSuccess = { "Groq models refreshed (${it.size})" },
+                                onFailure = { "Groq refresh failed: ${it.message}" }
+                            )
+                            (context as? ComponentActivity)?.runOnUiThread {
+                                result.getOrNull()?.let { groqModels = it }
+                                modelStatus = message
+                            }
+                        }.start()
+                    },
+                    onRefreshOpenRouter = {
+                        modelStatus = "Refreshing OpenRouter models..."
+                        Thread {
+                            val result = runCatching { OpenRouterClient().listModels(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
+                            result.onSuccess { repository.setCachedModels(ProviderId.OPENROUTER, it) }
+                            val message = result.fold(
+                                onSuccess = { "OpenRouter models refreshed (${it.size})" },
+                                onFailure = { "OpenRouter refresh failed: ${it.message}" }
+                            )
+                            (context as? ComponentActivity)?.runOnUiThread {
+                                result.getOrNull()?.let { openRouterModels = it }
+                                modelStatus = message
+                            }
+                        }.start()
+                    }
+                )
+                2 -> DictionaryScreen(repository = repository)
+                3 -> HistoryScreen(repository = repository, onRetry = onRetry, onCopy = onCopy)
             }
         }
     }
@@ -256,11 +357,13 @@ private fun VoiceSlipApp(
 
 @Composable
 private fun SetupScreen(
-    apiKey: String,
+    mistralKey: String,
+    groqKey: String,
+    openRouterKey: String,
     haptics: Boolean,
     bubbleSize: BubbleSize,
     setupStatus: SetupStatus,
-    onApiKeyChange: (String) -> Unit,
+    onProviderKeyChange: (ProviderId, String) -> Unit,
     onHapticsChange: (Boolean) -> Unit,
     onBubbleSizeChange: (BubbleSize) -> Unit,
     onOpenAccessibility: () -> Unit,
@@ -312,19 +415,14 @@ private fun SetupScreen(
         }
 
         item {
-            SectionTitle("Mistral")
+            SectionTitle("API keys")
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = apiKey,
-                        onValueChange = onApiKeyChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Mistral API key") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
-                    )
+                    ProviderKeyField("Mistral API key", mistralKey) { onProviderKeyChange(ProviderId.MISTRAL, it) }
+                    ProviderKeyField("Groq API key", groqKey) { onProviderKeyChange(ProviderId.GROQ, it) }
+                    ProviderKeyField("OpenRouter API key", openRouterKey) { onProviderKeyChange(ProviderId.OPENROUTER, it) }
                     Text(
-                        "V1 uses voxtral-mini-latest through Mistral audio transcriptions. The key is encrypted with Android Keystore before local storage.",
+                        "Keys are stored only on this device using Android Keystore-backed encryption. Recording is blocked only when the selected pipeline is missing a required key.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -358,6 +456,330 @@ private fun SetupScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ProviderKeyField(label: String, value: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(label) },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation()
+    )
+}
+
+@Composable
+private fun ModelsScreen(
+    config: PipelineConfig,
+    groqModels: List<ModelOption>,
+    openRouterModels: List<ModelOption>,
+    modelStatus: String?,
+    hasGroqKey: Boolean,
+    hasOpenRouterKey: Boolean,
+    onConfigChange: (PipelineConfig) -> Unit,
+    onRefreshGroq: () -> Unit,
+    onRefreshOpenRouter: () -> Unit
+) {
+    val postModels = when (config.postProcessingProvider) {
+        PostProcessingProvider.GROQ -> groqModels
+        PostProcessingProvider.OPENROUTER -> openRouterModels
+        PostProcessingProvider.NONE -> emptyList()
+    }
+    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionTitle("Models")
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            item {
+                SettingsCard {
+                    Text("Pipeline mode", fontWeight = FontWeight.SemiBold)
+                    ChoiceColumn(PipelineMode.entries.map { it.label }, config.mode.label) { label ->
+                        val mode = PipelineMode.entries.first { it.label == label }
+                        onConfigChange(
+                            config.copy(
+                                mode = mode,
+                                stylePreset = if (mode == PipelineMode.PURE_TRANSCRIPTION) StylePreset.RAW else config.stylePreset
+                            )
+                        )
+                    }
+                    Text(
+                        pipelineModeExplanation(config.mode),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (config.mode != PipelineMode.AUDIO_DIRECT) {
+                item {
+                    SettingsCard {
+                        Text("Transcription engine", fontWeight = FontWeight.SemiBold)
+                        TranscriptionEngineChoiceColumn(
+                            selected = config.transcriptionEngine,
+                            onSelect = { onConfigChange(config.copy(transcriptionEngine = it)) }
+                        )
+                    }
+                }
+            } else {
+                item {
+                    SettingsCard {
+                        Text("Audio direct model", fontWeight = FontWeight.SemiBold)
+                        AudioDirectChoiceColumn(
+                            selected = config.audioDirectEngine,
+                            onSelect = { onConfigChange(config.copy(audioDirectEngine = it)) }
+                        )
+                    }
+                }
+            }
+            if (config.mode == PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING) {
+                item {
+                    SettingsCard {
+                        Text("Post-processing provider", fontWeight = FontWeight.SemiBold)
+                        ChoiceRow(
+                            options = listOf(PostProcessingProvider.GROQ.label, PostProcessingProvider.OPENROUTER.label),
+                            selected = config.postProcessingProvider.label.takeIf { config.postProcessingProvider != PostProcessingProvider.NONE }.orEmpty()
+                        ) { label ->
+                            val provider = PostProcessingProvider.entries.first { it.label == label }
+                            onConfigChange(config.copy(postProcessingProvider = provider, postProcessingModel = ""))
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = onRefreshGroq, enabled = hasGroqKey) { Text("Refresh Groq") }
+                            OutlinedButton(onClick = onRefreshOpenRouter, enabled = hasOpenRouterKey) { Text("Refresh OpenRouter") }
+                        }
+                        modelStatus?.let {
+                            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                item {
+                    SettingsCard {
+                        Text("Post-processing model", fontWeight = FontWeight.SemiBold)
+                        ModelSelector(
+                            models = postModels,
+                            selectedModel = config.postProcessingModel,
+                            enabled = config.postProcessingProvider != PostProcessingProvider.NONE,
+                            onSelected = { onConfigChange(config.copy(postProcessingModel = it)) }
+                        )
+                    }
+                }
+            }
+            if (config.mode != PipelineMode.PURE_TRANSCRIPTION) {
+                item {
+                    SettingsCard {
+                        Text("Style", fontWeight = FontWeight.SemiBold)
+                        ChoiceColumn(StylePreset.entries.map { it.label }, config.stylePreset.label) { label ->
+                            onConfigChange(config.copy(stylePreset = StylePreset.entries.first { it.label == label }))
+                        }
+                    }
+                }
+            }
+            item {
+                Text(
+                    activePipelineText(config),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelSelector(
+    models: List<ModelOption>,
+    selectedModel: String,
+    enabled: Boolean,
+    onSelected: (String) -> Unit
+) {
+    var searchText by remember(selectedModel) { mutableStateOf(selectedModel) }
+    var selectedFromList by remember(selectedModel) { mutableStateOf(false) }
+    OutlinedTextField(
+        value = searchText,
+        onValueChange = {
+            searchText = it
+            selectedFromList = false
+            if (it == selectedModel) onSelected(it)
+        },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Search models or enter ID") },
+        enabled = enabled,
+        singleLine = true
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = {
+                onSelected(searchText.trim())
+                selectedFromList = true
+            },
+            enabled = enabled && searchText.isNotBlank()
+        ) { Text("Use model") }
+        if (selectedModel.isNotBlank()) {
+            Text(
+                "Selected: $selectedModel",
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+    val query = searchText.trim()
+    val filtered = models.filter {
+        query.isBlank() || it.id.contains(query, ignoreCase = true) || it.name.contains(query, ignoreCase = true)
+    }
+    if (filtered.isNotEmpty() && !selectedFromList) {
+        val listState = rememberLazyListState()
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(filtered.take(80), key = { it.id }) { model ->
+                ModelResultButton(model = model, enabled = enabled) {
+                    searchText = model.id
+                    onSelected(model.id)
+                    selectedFromList = true
+                }
+            }
+        }
+        if (filtered.size > 80) {
+            Text(
+                "Showing 80 of ${filtered.size} matches. Type more to narrow the list.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModelResultButton(model: ModelOption, enabled: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Text(model.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                model.id,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    }
+}
+
+@Composable
+private fun ChoiceRow(options: List<String>, selected: String, onSelect: (String) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            if (option == selected) Button(onClick = { onSelect(option) }) { Text(option) }
+            else OutlinedButton(onClick = { onSelect(option) }) { Text(option) }
+        }
+    }
+}
+
+@Composable
+private fun ChoiceColumn(options: List<String>, selected: String, onSelect: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            if (option == selected) Button(onClick = { onSelect(option) }, modifier = Modifier.fillMaxWidth()) { Text(option) }
+            else OutlinedButton(onClick = { onSelect(option) }, modifier = Modifier.fillMaxWidth()) { Text(option) }
+        }
+    }
+}
+
+@Composable
+private fun TranscriptionEngineChoiceColumn(
+    selected: TranscriptionEngineId,
+    onSelect: (TranscriptionEngineId) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        TranscriptionEngineId.entries.forEach { engine ->
+            EngineChoiceButton(
+                title = engine.displayName,
+                detail = "${engine.provider.label} · ${engine.model} · ${engineRole(engine)}",
+                selected = engine == selected,
+                onClick = { onSelect(engine) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun AudioDirectChoiceColumn(
+    selected: AudioDirectEngineId,
+    onSelect: (AudioDirectEngineId) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        AudioDirectEngineId.entries.forEach { engine ->
+            EngineChoiceButton(
+                title = engine.displayName,
+                detail = "${engine.provider.label} · ${engine.model} · audio chat -> final text",
+                selected = engine == selected,
+                onClick = { onSelect(engine) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun EngineChoiceButton(
+    title: String,
+    detail: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val content: @Composable RowScope.() -> Unit = {
+        Column(Modifier.fillMaxWidth()) {
+            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+    if (selected) Button(onClick = onClick, modifier = Modifier.fillMaxWidth(), content = content)
+    else OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth(), content = content)
+}
+
+private fun engineRole(engine: TranscriptionEngineId): String {
+    return when {
+        engine.audioChat -> "audio chat -> raw transcript"
+        engine.provider == ProviderId.GROQ -> "speech-to-text endpoint"
+        else -> "transcription endpoint"
+    }
+}
+
+private fun activePipelineText(config: PipelineConfig): String {
+    return when (config.mode) {
+        PipelineMode.PURE_TRANSCRIPTION ->
+            "Active: ${config.transcriptionEngine.displayName} (${config.transcriptionEngine.model}). Styles and post-processing are off."
+        PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ->
+            "Active: ${config.transcriptionEngine.displayName} (${config.transcriptionEngine.model}) -> ${config.postProcessingProvider.label} ${config.postProcessingModel.ifBlank { "(select model)" }}, ${config.stylePreset.label}."
+        PipelineMode.AUDIO_DIRECT ->
+            "Active: ${config.audioDirectEngine.displayName} (${config.audioDirectEngine.model}) with ${config.stylePreset.label} prompt in one call."
+    }
+}
+
+private fun pipelineModeExplanation(mode: PipelineMode): String {
+    return when (mode) {
+        PipelineMode.PURE_TRANSCRIPTION ->
+            "Only turns audio into text. Audio-chat engines in this mode are prompted to return a raw transcript, with no style cleanup."
+        PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ->
+            "First creates a raw transcript, then sends that text to Groq or OpenRouter for the selected style cleanup."
+        PipelineMode.AUDIO_DIRECT ->
+            "Sends audio and the style instruction to one Mistral audio-chat model. There may be no separate raw transcript."
     }
 }
 
@@ -409,6 +831,9 @@ private fun HistoryScreen(
     onCopy: (String) -> Unit
 ) {
     var items by remember { mutableStateOf(repository.listHistory()) }
+    var pendingClear by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<HistoryItem?>(null) }
+    var detailItem by remember { mutableStateOf<HistoryItem?>(null) }
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(1200)
@@ -419,27 +844,60 @@ private fun HistoryScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionTitle("History")
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = {
-                repository.clearHistory()
-                items = repository.listHistory()
-            }) { Text("Clear") }
+            OutlinedButton(onClick = { pendingClear = true }) { Text("Clear") }
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(items, key = { it.id }) { item ->
                 HistoryCard(
                     item = item,
+                    onOpen = { detailItem = item },
                     onRetry = {
                         onRetry(item)
                         items = repository.listHistory()
                     },
                     onCopy = { item.transcript?.let(onCopy) },
-                    onDelete = {
-                        repository.deleteHistory(item.id)
-                        items = repository.listHistory()
-                    }
+                    onDelete = { pendingDelete = item }
                 )
             }
         }
+    }
+    if (pendingClear) {
+        AlertDialog(
+            onDismissRequest = { pendingClear = false },
+            title = { Text("Delete all history?") },
+            text = { Text("This deletes every history item and its saved recording file.") },
+            confirmButton = {
+                Button(onClick = {
+                    repository.clearHistory()
+                    items = repository.listHistory()
+                    pendingClear = false
+                }) { Text("Delete history") }
+            },
+            dismissButton = { TextButton(onClick = { pendingClear = false }) { Text("Cancel") } }
+        )
+    }
+    pendingDelete?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete item?") },
+            text = { Text("This deletes this history item and its saved recording file.") },
+            confirmButton = {
+                Button(onClick = {
+                    repository.deleteHistory(item.id)
+                    items = repository.listHistory()
+                    pendingDelete = null
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } }
+        )
+    }
+    detailItem?.let { item ->
+        HistoryDetailDialog(
+            item = item,
+            onDismiss = { detailItem = null },
+            onCopyRaw = { item.rawTranscript?.let(onCopy) },
+            onCopyFinal = { item.displayText()?.let(onCopy) }
+        )
     }
 }
 
@@ -498,11 +956,16 @@ private fun DictionaryRow(entry: DictionaryEntry, onDelete: () -> Unit) {
 @Composable
 private fun HistoryCard(
     item: HistoryItem,
+    onOpen: () -> Unit,
     onRetry: () -> Unit,
     onCopy: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+    Card(
+        onClick = onOpen,
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+    ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(item.status.name.lowercase().replaceFirstChar { it.titlecase() }, fontWeight = FontWeight.Bold)
@@ -512,14 +975,14 @@ private fun HistoryCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            item.transcript?.takeIf { it.isNotBlank() }?.let {
+            item.displayText()?.takeIf { it.isNotBlank() }?.let {
                 Text(it, maxLines = 4, overflow = TextOverflow.Ellipsis)
             }
             item.error?.takeIf { it.isNotBlank() }?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
             Text(
-                "${item.model} · ${item.durationMillis / 1000}s · retries ${item.retryCount}",
+                "${item.pipelineSummary ?: item.model} · ${item.durationMillis / 1000}s · retries ${item.retryCount}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -530,6 +993,61 @@ private fun HistoryCard(
             }
         }
     }
+}
+
+@Composable
+private fun HistoryDetailDialog(
+    item: HistoryItem,
+    onDismiss: () -> Unit,
+    onCopyRaw: () -> Unit,
+    onCopyFinal: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(item.pipelineSummary ?: item.model) },
+        text = {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 460.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Text(
+                        "${item.status.name.lowercase().replaceFirstChar { it.titlecase() }} · ${item.durationMillis / 1000}s · retries ${item.retryCount}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                item.rawTranscript?.takeIf { it.isNotBlank() }?.let { raw ->
+                    item {
+                        Text("Raw transcript", fontWeight = FontWeight.SemiBold)
+                        Text(raw)
+                        OutlinedButton(onClick = onCopyRaw) { Text("Copy raw") }
+                    }
+                }
+                item.displayText()?.takeIf { it.isNotBlank() }?.let { finalText ->
+                    item {
+                        Text("Final text", fontWeight = FontWeight.SemiBold)
+                        Text(finalText)
+                        OutlinedButton(onClick = onCopyFinal) { Text("Copy final") }
+                    }
+                }
+                if (item.rawTranscript.isNullOrBlank()) {
+                    item {
+                        Text(
+                            "Raw transcript is not available for this pipeline.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                item.error?.takeIf { it.isNotBlank() }?.let { error ->
+                    item {
+                        Text("Error", fontWeight = FontWeight.SemiBold)
+                        Text(error, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
 }
 
 @Composable
@@ -552,23 +1070,33 @@ private data class SetupStatus(
     val accessibility: Boolean,
     val overlay: Boolean,
     val microphone: Boolean,
-    val apiKey: Boolean
+    val pipelineReady: Boolean,
+    val missingProviders: List<ProviderId>,
+    val pipelineRunnable: Boolean
 ) {
-    val ready: Boolean = accessibility && overlay && microphone && apiKey
+    val ready: Boolean = accessibility && overlay && microphone && pipelineReady && pipelineRunnable
     val missingItems: List<String> = buildList {
         if (!accessibility) add("accessibility")
         if (!overlay) add("overlay permission")
         if (!microphone) add("microphone")
-        if (!apiKey) add("Mistral API key")
+        missingProviders.forEach { add("${it.label} API key") }
+        if (!pipelineRunnable) add("complete model selection")
     }
 }
 
-private fun currentSetupStatus(context: Context, apiKey: String): SetupStatus {
+private fun currentSetupStatus(
+    context: Context,
+    config: PipelineConfig,
+    keys: Map<ProviderId, String>
+): SetupStatus {
+    val missingProviders = config.requiredProviders().filter { keys[it].isNullOrBlank() }
     return SetupStatus(
         accessibility = isAccessibilityEnabled(context),
         overlay = Settings.canDrawOverlays(context),
         microphone = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
-        apiKey = apiKey.isNotBlank()
+        pipelineReady = missingProviders.isEmpty(),
+        missingProviders = missingProviders,
+        pipelineRunnable = config.isRunnable()
     )
 }
 

@@ -14,24 +14,26 @@ class SecretStore(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("voiceslip_secrets", Context.MODE_PRIVATE)
 
-    fun saveMistralApiKey(key: String) {
+    fun saveApiKey(provider: ProviderId, key: String) {
         val clean = key.trim()
         if (clean.isBlank()) {
-            deleteMistralApiKey()
+            deleteApiKey(provider)
             return
         }
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
         val encrypted = cipher.doFinal(clean.toByteArray(Charsets.UTF_8))
+        val prefix = provider.prefPrefix()
         prefs.edit()
-            .putString("mistral_key_iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .putString("mistral_key_value", Base64.encodeToString(encrypted, Base64.NO_WRAP))
+            .putString("${prefix}_iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString("${prefix}_value", Base64.encodeToString(encrypted, Base64.NO_WRAP))
             .apply()
     }
 
-    fun getMistralApiKey(): String? {
-        val iv = prefs.getString("mistral_key_iv", null) ?: return null
-        val value = prefs.getString("mistral_key_value", null) ?: return null
+    fun getApiKey(provider: ProviderId): String? {
+        val prefix = provider.prefPrefix()
+        val iv = prefs.getString("${prefix}_iv", null) ?: return null
+        val value = prefs.getString("${prefix}_value", null) ?: return null
         return runCatching {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             val spec = GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP))
@@ -40,8 +42,21 @@ class SecretStore(context: Context) {
         }.getOrNull()
     }
 
+    fun deleteApiKey(provider: ProviderId) {
+        val prefix = provider.prefPrefix()
+        prefs.edit().remove("${prefix}_iv").remove("${prefix}_value").apply()
+    }
+
+    fun saveMistralApiKey(key: String) {
+        saveApiKey(ProviderId.MISTRAL, key)
+    }
+
+    fun getMistralApiKey(): String? {
+        return getApiKey(ProviderId.MISTRAL)
+    }
+
     fun deleteMistralApiKey() {
-        prefs.edit().remove("mistral_key_iv").remove("mistral_key_value").apply()
+        deleteApiKey(ProviderId.MISTRAL)
     }
 
     private fun getOrCreateKey(): SecretKey {
@@ -69,3 +84,8 @@ class SecretStore(context: Context) {
     }
 }
 
+private fun ProviderId.prefPrefix(): String = when (this) {
+    ProviderId.MISTRAL -> "mistral_key"
+    ProviderId.GROQ -> "groq_key"
+    ProviderId.OPENROUTER -> "openrouter_key"
+}
