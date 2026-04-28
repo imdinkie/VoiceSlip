@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">VoiceSlip</string>
+    <string name="accessibility_description">Shows a dictation bubble when a text field and keyboard are active, then inserts your transcription into the current field.</string>
+</resources>
