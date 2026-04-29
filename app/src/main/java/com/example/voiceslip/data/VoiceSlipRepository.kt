@@ -12,19 +12,43 @@ class VoiceSlipRepository(context: Context) {
 
     val recordingsDir: File = File(appContext.filesDir, "recordings").apply { mkdirs() }
 
+    fun getAppEnabled(): Boolean = prefs.getBoolean("app_enabled", true)
+
+    fun setAppEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("app_enabled", enabled).apply()
+    }
+
     fun getHapticsEnabled(): Boolean = prefs.getBoolean("haptics_enabled", false)
 
     fun setHapticsEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("haptics_enabled", enabled).apply()
     }
 
-    fun getBubbleSize(): BubbleSize {
-        val stored = prefs.getString("bubble_size", BubbleSize.MEDIUM.name).orEmpty()
-        return BubbleSize.entries.firstOrNull { it.name == stored } ?: BubbleSize.MEDIUM
+    fun getBubbleSizeDp(): Int {
+        val stored = prefs.getInt("bubble_size_dp", Int.MIN_VALUE)
+        if (stored != Int.MIN_VALUE) {
+            return stored.coerceIn(BUBBLE_SIZE_MIN_DP, BUBBLE_SIZE_MAX_DP)
+        }
+        return when (prefs.getString("bubble_size", "MEDIUM")) {
+            "SMALL" -> 48
+            "LARGE" -> BUBBLE_SIZE_MAX_DP
+            else -> BUBBLE_SIZE_DEFAULT_DP
+        }
     }
 
-    fun setBubbleSize(size: BubbleSize) {
-        prefs.edit().putString("bubble_size", size.name).apply()
+    fun setBubbleSizeDp(sizeDp: Int) {
+        prefs.edit().putInt("bubble_size_dp", sizeDp.coerceIn(BUBBLE_SIZE_MIN_DP, BUBBLE_SIZE_MAX_DP)).apply()
+    }
+
+    fun getBubbleOpacityPercent(): Int {
+        return prefs.getInt("bubble_opacity_percent", BUBBLE_OPACITY_DEFAULT_PERCENT)
+            .coerceIn(BUBBLE_OPACITY_MIN_PERCENT, BUBBLE_OPACITY_MAX_PERCENT)
+    }
+
+    fun setBubbleOpacityPercent(opacityPercent: Int) {
+        prefs.edit()
+            .putInt("bubble_opacity_percent", opacityPercent.coerceIn(BUBBLE_OPACITY_MIN_PERCENT, BUBBLE_OPACITY_MAX_PERCENT))
+            .apply()
     }
 
     fun getBubbleX(): Int = prefs.getInt("bubble_x", -1)

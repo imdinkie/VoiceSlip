@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -45,8 +46,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -61,6 +64,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -70,7 +74,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
-import com.example.voiceslip.data.BubbleSize
+import com.example.voiceslip.data.BUBBLE_OPACITY_MAX_PERCENT
+import com.example.voiceslip.data.BUBBLE_OPACITY_MIN_PERCENT
+import com.example.voiceslip.data.BUBBLE_SIZE_MAX_DP
+import com.example.voiceslip.data.BUBBLE_SIZE_MIN_DP
 import com.example.voiceslip.data.DictionaryEntry
 import com.example.voiceslip.data.HistoryItem
 import com.example.voiceslip.data.ModelOption
@@ -88,9 +95,11 @@ import com.example.voiceslip.net.GroqClient
 import com.example.voiceslip.net.OpenRouterClient
 import com.example.voiceslip.net.PipelineException
 import com.example.voiceslip.net.PipelineExecutor
+import com.example.voiceslip.service.VoiceSlipAccessibilityService
 import com.example.voiceslip.ui.theme.VoiceSlipTheme
 import java.io.File
 import java.util.Date
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private lateinit var repository: VoiceSlipRepository
@@ -198,8 +207,10 @@ private fun VoiceSlipApp(
     var groqModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.GROQ)) }
     var openRouterModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.OPENROUTER)) }
     var modelStatus by remember { mutableStateOf<String?>(null) }
+    var appEnabled by remember { mutableStateOf(repository.getAppEnabled()) }
     var haptics by remember { mutableStateOf(repository.getHapticsEnabled()) }
-    var bubbleSize by remember { mutableStateOf(repository.getBubbleSize()) }
+    var bubbleSizeDp by remember { mutableIntStateOf(repository.getBubbleSizeDp()) }
+    var bubbleOpacityPercent by remember { mutableIntStateOf(repository.getBubbleOpacityPercent()) }
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         refreshTick++
     }
@@ -214,8 +225,10 @@ private fun VoiceSlipApp(
         pipelineConfig = repository.getPipelineConfig()
         groqModels = repository.getCachedModels(ProviderId.GROQ)
         openRouterModels = repository.getCachedModels(ProviderId.OPENROUTER)
+        appEnabled = repository.getAppEnabled()
         haptics = repository.getHapticsEnabled()
-        bubbleSize = repository.getBubbleSize()
+        bubbleSizeDp = repository.getBubbleSizeDp()
+        bubbleOpacityPercent = repository.getBubbleOpacityPercent()
     }
     DisposableEffect(context) {
         val lifecycleOwner = context as? LifecycleOwner
@@ -259,7 +272,13 @@ private fun VoiceSlipApp(
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.weight(1f))
-                    StatusPill(if (setupStatus.ready) "Ready" else "Setup")
+                    StatusPill(
+                        when {
+                            !appEnabled -> "Off"
+                            setupStatus.ready -> "Ready"
+                            else -> "Setup"
+                        }
+                    )
                 }
                 TabRow(selectedTabIndex = selectedTab) {
                     listOf("Setup", "Models", "Dictionary", "History").forEachIndexed { index, title ->
@@ -279,8 +298,10 @@ private fun VoiceSlipApp(
                     mistralKey = mistralKey,
                     groqKey = groqKey,
                     openRouterKey = openRouterKey,
+                    appEnabled = appEnabled,
                     haptics = haptics,
-                    bubbleSize = bubbleSize,
+                    bubbleSizeDp = bubbleSizeDp,
+                    bubbleOpacityPercent = bubbleOpacityPercent,
                     setupStatus = setupStatus,
                     onProviderKeyChange = { provider, key ->
                         when (provider) {
@@ -290,13 +311,22 @@ private fun VoiceSlipApp(
                         }
                         secretStore.saveApiKey(provider, key)
                     },
+                    onAppEnabledChange = {
+                        appEnabled = it
+                        repository.setAppEnabled(it)
+                        VoiceSlipAccessibilityService.instance?.refreshFromSettings()
+                    },
                     onHapticsChange = {
                         haptics = it
                         repository.setHapticsEnabled(it)
                     },
                     onBubbleSizeChange = {
-                        bubbleSize = it
-                        repository.setBubbleSize(it)
+                        bubbleSizeDp = it
+                        repository.setBubbleSizeDp(it)
+                    },
+                    onBubbleOpacityChange = {
+                        bubbleOpacityPercent = it
+                        repository.setBubbleOpacityPercent(it)
                     },
                     onOpenAccessibility = onOpenAccessibility,
                     onOpenOverlay = onOpenOverlay,
@@ -360,12 +390,16 @@ private fun SetupScreen(
     mistralKey: String,
     groqKey: String,
     openRouterKey: String,
+    appEnabled: Boolean,
     haptics: Boolean,
-    bubbleSize: BubbleSize,
+    bubbleSizeDp: Int,
+    bubbleOpacityPercent: Int,
     setupStatus: SetupStatus,
     onProviderKeyChange: (ProviderId, String) -> Unit,
+    onAppEnabledChange: (Boolean) -> Unit,
     onHapticsChange: (Boolean) -> Unit,
-    onBubbleSizeChange: (BubbleSize) -> Unit,
+    onBubbleSizeChange: (Int) -> Unit,
+    onBubbleOpacityChange: (Int) -> Unit,
     onOpenAccessibility: () -> Unit,
     onOpenOverlay: () -> Unit,
     onRequestMic: () -> Unit,
@@ -381,6 +415,47 @@ private fun SetupScreen(
                 SetupWarning(setupStatus.missingItems)
                 Spacer(Modifier.height(12.dp))
             }
+            SectionTitle("Interaction")
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("VoiceSlip bubble", fontWeight = FontWeight.SemiBold)
+                            Text("Turns the floating dictation bubble on or off.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        SettingsSwitch(checked = appEnabled, onCheckedChange = onAppEnabledChange)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Short haptics", fontWeight = FontWeight.SemiBold)
+                            Text("Off by default. Vibrates briefly on record, cancel, and submit.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        SettingsSwitch(checked = haptics, onCheckedChange = onHapticsChange)
+                    }
+                    BubblePreview(sizeDp = bubbleSizeDp, opacityPercent = bubbleOpacityPercent)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SettingHeader("Bubble size", "${bubbleSizeDp}dp")
+                        Slider(
+                            value = bubbleSizeDp.toFloat(),
+                            onValueChange = { onBubbleSizeChange(it.roundToInt()) },
+                            valueRange = BUBBLE_SIZE_MIN_DP.toFloat()..BUBBLE_SIZE_MAX_DP.toFloat(),
+                            steps = BUBBLE_SIZE_MAX_DP - BUBBLE_SIZE_MIN_DP - 1
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SettingHeader("Bubble opacity", "$bubbleOpacityPercent%")
+                        Slider(
+                            value = bubbleOpacityPercent.toFloat(),
+                            onValueChange = { onBubbleOpacityChange(it.roundToInt()) },
+                            valueRange = BUBBLE_OPACITY_MIN_PERCENT.toFloat()..BUBBLE_OPACITY_MAX_PERCENT.toFloat(),
+                            steps = ((BUBBLE_OPACITY_MAX_PERCENT - BUBBLE_OPACITY_MIN_PERCENT) / 5) - 1
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
             SectionTitle("Permissions")
             PermissionRow(
                 title = "Accessibility service",
@@ -430,32 +505,69 @@ private fun SetupScreen(
             }
         }
 
-        item {
-            SectionTitle("Interaction")
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Short haptics", fontWeight = FontWeight.SemiBold)
-                            Text("Off by default. Vibrates briefly on record, cancel, and submit.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(checked = haptics, onCheckedChange = onHapticsChange)
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Bubble size", fontWeight = FontWeight.SemiBold)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            BubbleSize.entries.forEach { size ->
-                                if (size == bubbleSize) {
-                                    Button(onClick = { onBubbleSizeChange(size) }) { Text(size.label) }
-                                } else {
-                                    OutlinedButton(onClick = { onBubbleSizeChange(size) }) { Text(size.label) }
-                                }
-                            }
-                        }
+    }
+}
+
+@Composable
+private fun SettingsSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = Color(0xFFE8F0E3),
+            checkedTrackColor = Color(0xFF314A3F),
+            uncheckedThumbColor = Color(0xFFE8F0E3),
+            uncheckedTrackColor = Color(0xFF26342D)
+        )
+    )
+}
+
+@Composable
+private fun BubblePreview(sizeDp: Int, opacityPercent: Int) {
+    val innerSizeDp = (sizeDp - 8).coerceAtLeast(1)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(104.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(sizeDp.dp)
+                .alpha(opacityPercent / 100f)
+                .padding(4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFFC2B8CD), RoundedCornerShape(22.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy((innerSizeDp * 0.07f).dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    listOf(0.21f, 0.39f, 0.29f, 0.5f, 0.18f).forEach { heightRatio ->
+                        Box(
+                            Modifier
+                                .width((innerSizeDp * 0.07f).dp)
+                                .height((innerSizeDp * heightRatio).dp)
+                                .background(Color(0xFF1C1820), RoundedCornerShape(3.dp))
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingHeader(title: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.weight(1f))
+        Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

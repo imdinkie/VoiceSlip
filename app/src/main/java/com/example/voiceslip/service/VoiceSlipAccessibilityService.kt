@@ -111,12 +111,17 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         hideOverlay()
     }
 
+    fun refreshFromSettings() {
+        refreshOverlayVisibility()
+    }
+
     private fun refreshOverlayVisibility() {
         if (recorder.isRecording) return
         if (shouldShowBubble()) showOverlay(expanded = false) else hideOverlay()
     }
 
     private fun shouldShowBubble(): Boolean {
+        if (!repository.getAppEnabled()) return false
         if (!hasInputMethodWindow()) return false
         val activePackage = activeApplicationPackage()
         if (activePackage == packageName) return false
@@ -188,6 +193,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val view = RecordingOverlay(
             context = this,
             compactSizePx = compactSize,
+            opacity = bubbleOpacity(),
             onBubbleClick = { startRecording() },
             onCancel = { cancelRecording() },
             onSubmit = { submitRecording() },
@@ -235,6 +241,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val params = overlayParams ?: return
         val compactSize = compactSizePx()
         view.setCompactSize(compactSize)
+        view.setBubbleOpacity(bubbleOpacity())
         view.setExpanded(expanded)
         val width = if (expanded) expandedWidthPx(compactSize) else compactSize
         val height = compactSize
@@ -294,7 +301,9 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         runCatching { windowManager.updateViewLayout(view, params) }
     }
 
-    private fun compactSizePx(): Int = dp(repository.getBubbleSize().dp)
+    private fun compactSizePx(): Int = dp(repository.getBubbleSizeDp())
+
+    private fun bubbleOpacity(): Float = repository.getBubbleOpacityPercent() / 100f
 
     private fun expandedWidthPx(compactSize: Int): Int = (compactSize * 3.6f).toInt()
 
@@ -445,7 +454,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             mainHandler.post {
                 currentItem = null
                 if (updated.status == RecordingStatus.SUCCEEDED) {
-                    toast(insertionToast(updated.errorStage))
+                    insertionToast(updated.errorStage)?.let { toast(it) }
                 } else {
                     toast("Transcription failed. Open VoiceSlip to retry.")
                 }
@@ -520,10 +529,10 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         clipboard.setPrimaryClip(ClipData.newPlainText("VoiceSlip transcription", text))
     }
 
-    private fun insertionToast(errorStage: String?): String {
+    private fun insertionToast(errorStage: String?): String? {
         return when (errorStage) {
-            null -> "Inserted transcription"
-            "clipboard_fallback" -> "Inserted transcription using clipboard fallback"
+            null -> null
+            "clipboard_fallback" -> null
             "no_editable_target" -> "Copied transcription"
             "sensitive_field" -> "Cannot insert into sensitive fields"
             else -> "Could not insert transcription"
@@ -647,35 +656,31 @@ private class BubbleIconView(context: Context) : View(context) {
         val size = min(width, height).toFloat()
         val centerX = width / 2f
         val centerY = height / 2f
-        paint.strokeWidth = size * 0.07f
-
-        val micTop = centerY - size * 0.22f
-        val micBottom = centerY + size * 0.12f
-        val micRadius = size * 0.13f
-        canvas.drawRoundRect(
-            centerX - micRadius,
-            micTop,
-            centerX + micRadius,
-            micBottom,
-            micRadius,
-            micRadius,
-            paint
-        )
-        canvas.drawLine(centerX, micBottom + size * 0.03f, centerX, centerY + size * 0.28f, paint)
-        canvas.drawLine(centerX - size * 0.14f, centerY + size * 0.28f, centerX + size * 0.14f, centerY + size * 0.28f, paint)
-
-        val waveTop = centerY - size * 0.06f
-        val waveBottom = centerY + size * 0.06f
-        canvas.drawLine(centerX - size * 0.32f, waveTop, centerX - size * 0.32f, waveBottom, paint)
-        canvas.drawLine(centerX + size * 0.32f, waveTop, centerX + size * 0.32f, waveBottom, paint)
-        canvas.drawLine(centerX - size * 0.42f, centerY - size * 0.02f, centerX - size * 0.42f, centerY + size * 0.02f, paint)
-        canvas.drawLine(centerX + size * 0.42f, centerY - size * 0.02f, centerX + size * 0.42f, centerY + size * 0.02f, paint)
+        val barWidth = size * 0.07f
+        val gap = size * 0.07f
+        val heights = floatArrayOf(0.21f, 0.39f, 0.29f, 0.5f, 0.18f)
+        val totalWidth = barWidth * heights.size + gap * (heights.size - 1)
+        var left = centerX - totalWidth / 2f
+        heights.forEach { heightRatio ->
+            val barHeight = size * heightRatio
+            canvas.drawRoundRect(
+                left,
+                centerY - barHeight / 2f,
+                left + barWidth,
+                centerY + barHeight / 2f,
+                barWidth / 2f,
+                barWidth / 2f,
+                paint
+            )
+            left += barWidth + gap
+        }
     }
 }
 
 private class RecordingOverlay(
     context: Context,
     compactSizePx: Int,
+    opacity: Float,
     private val onBubbleClick: () -> Unit,
     private val onCancel: () -> Unit,
     private val onSubmit: () -> Unit,
@@ -696,6 +701,7 @@ private class RecordingOverlay(
     private var uiState = RecordingUiState.IDLE
 
     init {
+        alpha = opacity
         setPadding(dp(4), dp(4), dp(4), dp(4))
         collapsed.background = bubbleBg(Color.rgb(194, 184, 205), dp(22).toFloat())
         addView(collapsed, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -752,6 +758,10 @@ private class RecordingOverlay(
         updateExpandedChildSizes()
         collapsed.invalidate()
         waveform.invalidate()
+    }
+
+    fun setBubbleOpacity(opacity: Float) {
+        alpha = opacity.coerceIn(0.2f, 1f)
     }
 
     fun setRecordingState(state: RecordingUiState) {

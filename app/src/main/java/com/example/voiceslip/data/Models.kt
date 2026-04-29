@@ -8,11 +8,12 @@ enum class RecordingStatus {
     CANCELED
 }
 
-enum class BubbleSize(val label: String, val dp: Int) {
-    SMALL("Small", 56),
-    MEDIUM("Medium", 64),
-    LARGE("Large", 76)
-}
+const val BUBBLE_SIZE_MIN_DP = 44
+const val BUBBLE_SIZE_DEFAULT_DP = 56
+const val BUBBLE_SIZE_MAX_DP = 64
+const val BUBBLE_OPACITY_MIN_PERCENT = 20
+const val BUBBLE_OPACITY_DEFAULT_PERCENT = 80
+const val BUBBLE_OPACITY_MAX_PERCENT = 100
 
 enum class ProviderId(val label: String) {
     MISTRAL("Mistral"),
