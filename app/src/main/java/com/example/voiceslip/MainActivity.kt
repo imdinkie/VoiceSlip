@@ -32,9 +32,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -46,6 +48,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -58,6 +61,11 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -1299,6 +1307,7 @@ private fun StyleHomeScreen(
     val categories = remember(refreshKey) { repository.listCategories() }
     val apps = remember(refreshKey) { repository.listInstalledApps() }
     var newCategoryName by remember { mutableStateOf("") }
+    var showNewCategory by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             SectionTitle("Style")
@@ -1308,7 +1317,14 @@ private fun StyleHomeScreen(
             }
         }
         item {
-            Text("Categories", fontWeight = FontWeight.SemiBold)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Categories", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                OutlinedButton(onClick = { showNewCategory = true }) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Add category")
+                }
+            }
         }
         items(categories, key = { it.id }) { category ->
             val styleName = styles.firstOrNull { it.id == category.styleId }?.name ?: "Casual"
@@ -1318,30 +1334,44 @@ private fun StyleHomeScreen(
             CategoryCard(category, styleName, categoryApps) { onRoute(StyleRoute.CategoryDetail(category.id)) }
         }
         item {
-            SettingsCard {
-                OutlinedTextField(
-                    value = newCategoryName,
-                    onValueChange = { newCategoryName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("New custom category") },
-                    singleLine = true,
-                    trailingIcon = {
-                        TextButton(onClick = {
-                            repository.createCustomCategory(newCategoryName)
-                            newCategoryName = ""
-                            onReload()
-                        }) { Text("Add") }
-                    }
-                )
-            }
-        }
-        item {
             EntryRow("All Apps", "Search and change app categories") { onRoute(StyleRoute.AllApps) }
             Spacer(Modifier.height(8.dp))
             EntryRow("Style Library", "Edit style prompts and create reusable styles") { onRoute(StyleRoute.StyleLibrary()) }
             Spacer(Modifier.height(8.dp))
             EntryRow("Prompt Settings", "Edit the shared cleanup policy") { onRoute(StyleRoute.PromptSettings) }
         }
+    }
+    if (showNewCategory) {
+        AlertDialog(
+            onDismissRequest = { showNewCategory = false },
+            title = { Text("Add category") },
+            text = {
+                OutlinedTextField(
+                    value = newCategoryName,
+                    onValueChange = { newCategoryName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Category name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        repository.createCustomCategory(newCategoryName)
+                        newCategoryName = ""
+                        showNewCategory = false
+                        onReload()
+                    },
+                    enabled = newCategoryName.isNotBlank()
+                ) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    newCategoryName = ""
+                    showNewCategory = false
+                }) { Text("Cancel") }
+            }
+        )
     }
 }
 
@@ -1422,8 +1452,16 @@ private fun CategoryDetailScreen(
                     Text(style.name, style = MaterialTheme.typography.titleMedium)
                     Text(style.effectivePrompt, maxLines = 3, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onChooseStyle) { Text("Change") }
-                        OutlinedButton(onClick = { onEditStyle(style.id) }) { Text("Edit prompt") }
+                        OutlinedButton(onClick = onChooseStyle) {
+                            Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Change")
+                        }
+                        OutlinedButton(onClick = { onEditStyle(style.id) }) {
+                            Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Edit prompt")
+                        }
                     }
                 }
             }
@@ -1624,8 +1662,25 @@ private fun RefreshStatusRow(refreshState: StyleRefreshState, onRefreshApps: () 
 
 @Composable
 private fun TopArrowButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Button(onClick = onClick, modifier = modifier.size(48.dp)) {
-        Text("↑", fontWeight = FontWeight.Bold)
+    Surface(
+        modifier = modifier
+            .wrapContentWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shadowElevation = 6.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .defaultMinSize(minHeight = 44.dp)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(Icons.Filled.KeyboardArrowUp, contentDescription = null, modifier = Modifier.size(22.dp))
+            Text("Top", fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
@@ -1779,20 +1834,41 @@ private fun StyleLibraryScreen(
 
 @Composable
 private fun StyleRow(style: VoiceStyle, selected: Boolean, chooseMode: Boolean, onClick: () -> Unit) {
+    var expanded by remember(style.id) { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(style.name, fontWeight = FontWeight.SemiBold)
-                    when {
-                        style.isBuiltIn && style.userPromptOverride != null -> StyleLabel("Modified")
-                        !style.isBuiltIn -> StyleLabel("Custom")
-                    }
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(style.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    StyleKindLabel(style)
                 }
-                Text(style.effectivePrompt, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (chooseMode && selected) Text("Selected", color = MaterialTheme.colorScheme.primary)
             }
-            if (chooseMode && selected) Text("Selected", color = MaterialTheme.colorScheme.primary)
+            Text(
+                style.effectivePrompt,
+                maxLines = if (expanded) Int.MAX_VALUE else 4,
+                overflow = if (expanded) TextOverflow.Clip else TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TextButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.align(Alignment.Start)
+            ) {
+                Text(if (expanded) "Show less" else "Show full prompt")
+            }
         }
+    }
+}
+
+@Composable
+private fun StyleKindLabel(style: VoiceStyle) {
+    when {
+        style.isBuiltIn && style.userPromptOverride != null -> StyleLabel("Modified")
+        !style.isBuiltIn -> StyleLabel("Custom")
     }
 }
 
