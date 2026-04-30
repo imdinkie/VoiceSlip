@@ -75,6 +75,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -1348,14 +1349,14 @@ private fun CategoryDetailScreen(
             }
         }
         if (listState.firstVisibleItemIndex > 2) {
-            Button(
+            TopArrowButton(
                 onClick = {
                     scrollScope.launch {
                         listState.animateScrollToItem(0)
                     }
                 },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)
-            ) { Text("Top") }
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp)
+            )
         }
     }
     pending?.let { change ->
@@ -1381,27 +1382,49 @@ private fun AllAppsScreen(
     var query by remember { mutableStateOf("") }
     var selectedCategoryId by remember { mutableStateOf<String?>(null) }
     val apps = remember(refreshKey, query) { repository.listInstalledApps(query) }
+    val listState = rememberLazyListState()
+    val scrollScope = rememberCoroutineScope()
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        ScreenHeader("All Apps", onBack)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onRefreshApps, enabled = !refreshState.isRefreshing) { Text("Refresh apps") }
-            Text(appRefreshText(refreshState), modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
-        }
-        OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Search apps") }, singleLine = true)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CategoryChip("All", selectedCategoryId == null) { selectedCategoryId = null }
-            categories.forEach { category ->
-                CategoryChip(category.name, selectedCategoryId == category.id) { selectedCategoryId = category.id }
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(20.dp),
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item { ScreenHeader("All Apps", onBack) }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onRefreshApps, enabled = !refreshState.isRefreshing) { Text("Refresh apps") }
+                    Text(appRefreshText(refreshState), modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                }
             }
-        }
-        val filtered = apps.filter {
-            selectedCategoryId == null || if (selectedCategoryId == CATEGORY_OTHER) it.categoryId == null else it.categoryId == selectedCategoryId
-        }.sortedWith(compareByDescending<com.example.voiceslip.data.InstalledAppInfo> { it.lastSeenAtMillis ?: 0L }.thenBy { it.label.lowercase() })
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Search apps") }, singleLine = true)
+            }
+            item {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CategoryChip("All", selectedCategoryId == null) { selectedCategoryId = null }
+                    categories.forEach { category ->
+                        CategoryChip(category.name, selectedCategoryId == category.id) { selectedCategoryId = category.id }
+                    }
+                }
+            }
+            val filtered = apps.filter {
+                selectedCategoryId == null || if (selectedCategoryId == CATEGORY_OTHER) it.categoryId == null else it.categoryId == selectedCategoryId
+            }.sortedWith(compareByDescending<com.example.voiceslip.data.InstalledAppInfo> { it.lastSeenAtMillis ?: 0L }.thenBy { it.label.lowercase() })
             items(filtered, key = { it.packageName }) { app ->
                 AppLookupRow(app) { onPickAppCategory(app.packageName) }
             }
+        }
+        if (listState.firstVisibleItemIndex > 2) {
+            TopArrowButton(
+                onClick = {
+                    scrollScope.launch {
+                        listState.animateScrollToItem(0)
+                    }
+                },
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp)
+            )
         }
     }
 }
@@ -1491,6 +1514,13 @@ private fun RefreshStatusRow(refreshState: StyleRefreshState, onRefreshApps: () 
     }
 }
 
+@Composable
+private fun TopArrowButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Button(onClick = onClick, modifier = modifier.size(48.dp)) {
+        Text("↑", fontWeight = FontWeight.Bold)
+    }
+}
+
 private fun appRefreshText(state: StyleRefreshState): String {
     state.message?.let { return "$it · ${state.appCount} apps" }
     if (state.isRefreshing) return "Refreshing apps · ${state.appCount} cached"
@@ -1537,11 +1567,11 @@ private fun AppText(app: com.example.voiceslip.data.InstalledAppInfo, modifier: 
 }
 
 @Composable
-private fun AppIcon(iconCacheKey: String, label: String) {
+private fun AppIcon(iconCacheKey: String, label: String, size: Dp = 36.dp) {
     val file = remember(iconCacheKey) { File(iconCacheKey) }
     if (iconCacheKey.isNotBlank() && file.exists()) {
         AndroidView(
-            modifier = Modifier.size(36.dp),
+            modifier = Modifier.size(size),
             factory = {
                 android.widget.ImageView(it).apply {
                     scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
@@ -1552,7 +1582,7 @@ private fun AppIcon(iconCacheKey: String, label: String) {
         )
     } else {
         Box(
-            Modifier.size(36.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(9.dp)),
+            Modifier.size(size).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
             Text(label.trim().take(1).uppercase().ifBlank { "?" }, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
@@ -1874,6 +1904,7 @@ private fun HistoryScreen(
     var pendingClear by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<HistoryItem?>(null) }
     var detailItem by remember { mutableStateOf<HistoryItem?>(null) }
+    val appIconCache = remember(items) { repository.listInstalledApps().associateBy { it.packageName } }
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(1200)
@@ -1890,6 +1921,7 @@ private fun HistoryScreen(
             items(items, key = { it.id }) { item ->
                 HistoryCard(
                     item = item,
+                    iconCacheKey = item.targetPackage?.let { appIconCache[it]?.iconCacheKey },
                     onOpen = { detailItem = item },
                     onRetry = {
                         onRetry(item)
@@ -1934,6 +1966,7 @@ private fun HistoryScreen(
     detailItem?.let { item ->
         HistoryDetailDialog(
             item = item,
+            iconCacheKey = item.targetPackage?.let { appIconCache[it]?.iconCacheKey },
             onDismiss = { detailItem = null },
             onCopyRaw = { item.rawTranscript?.let(onCopy) },
             onCopyFinal = { item.displayText()?.let(onCopy) }
@@ -1996,6 +2029,7 @@ private fun DictionaryRow(entry: DictionaryEntry, onDelete: () -> Unit) {
 @Composable
 private fun HistoryCard(
     item: HistoryItem,
+    iconCacheKey: String?,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
     onCopy: () -> Unit,
@@ -2022,7 +2056,12 @@ private fun HistoryCard(
                 Text(it, color = MaterialTheme.colorScheme.error, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
             historyContextLine(item)?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (!iconCacheKey.isNullOrBlank()) {
+                        AppIcon(iconCacheKey, item.targetAppLabel ?: item.targetPackage.orEmpty(), size = 22.dp)
+                    }
+                    Text(it, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
             Text(
                 "${item.pipelineSummary ?: item.model} · ${item.durationMillis / 1000}s · retries ${item.retryCount}",
@@ -2041,6 +2080,7 @@ private fun HistoryCard(
 @Composable
 private fun HistoryDetailDialog(
     item: HistoryItem,
+    iconCacheKey: String?,
     onDismiss: () -> Unit,
     onCopyRaw: () -> Unit,
     onCopyFinal: () -> Unit
@@ -2089,6 +2129,12 @@ private fun HistoryDetailDialog(
                 }
                 item {
                     Text("Debug", fontWeight = FontWeight.SemiBold)
+                    if (!iconCacheKey.isNullOrBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AppIcon(iconCacheKey, item.targetAppLabel ?: item.targetPackage.orEmpty(), size = 24.dp)
+                            Text(item.targetAppLabel ?: item.targetPackage.orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                     DebugLine("Package", item.targetPackage)
                     DebugLine("App", item.targetAppLabel)
                     DebugLine("Category", item.resolvedCategoryName ?: item.resolvedCategoryId)
