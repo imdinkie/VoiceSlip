@@ -14,9 +14,10 @@ class OpenRouterClient {
         detectedLanguage: String?,
         dictionaryTerms: List<String>,
         stylePrompt: String,
-        cleanupPolicy: String
+        cleanupPolicy: String,
+        preserveSpokenLanguage: Boolean
     ): PostProcessingResult {
-        val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePrompt, cleanupPolicy)
+        val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePrompt, cleanupPolicy, preserveSpokenLanguage)
         val json = JSONObject(postJson("https://openrouter.ai/api/v1/chat/completions", apiKey, request))
         return parsePostProcessing(json, model)
     }

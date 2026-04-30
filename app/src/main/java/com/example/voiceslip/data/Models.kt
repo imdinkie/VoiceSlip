@@ -28,8 +28,7 @@ enum class PipelineMode(val label: String) {
 }
 
 enum class StylePreset(val label: String) {
-    RAW("Raw"),
-    CLEAN("Clean"),
+    VERY_CASUAL("Very casual"),
     CASUAL("Casual"),
     FORMAL("Formal"),
     EXCITED("Excited")
@@ -148,7 +147,7 @@ data class HistoryItem(
     val audioModel: String? = null,
     val postProcessingProvider: String? = null,
     val postProcessingModel: String? = null,
-    val stylePreset: String = StylePreset.RAW.name,
+    val stylePreset: String = StylePreset.CASUAL.name,
     val pipelineSummary: String? = null,
     val errorStage: String? = null,
     val metadataJson: String? = null,

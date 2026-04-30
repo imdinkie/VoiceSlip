@@ -65,9 +65,10 @@ class GroqClient {
         detectedLanguage: String?,
         dictionaryTerms: List<String>,
         stylePrompt: String,
-        cleanupPolicy: String
+        cleanupPolicy: String,
+        preserveSpokenLanguage: Boolean
     ): PostProcessingResult {
-        val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePrompt, cleanupPolicy)
+        val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePrompt, cleanupPolicy, preserveSpokenLanguage)
         val json = JSONObject(postJson("https://api.groq.com/openai/v1/chat/completions", apiKey, request))
         return parsePostProcessing(json, model)
     }
@@ -112,19 +113,27 @@ internal fun postProcessingRequest(
     detectedLanguage: String?,
     dictionaryTerms: List<String>,
     stylePrompt: String,
-    cleanupPolicy: String
+    cleanupPolicy: String,
+    preserveSpokenLanguage: Boolean
 ): JSONObject {
     val system = buildString {
-        append("Clean this raw transcript and return the final insertable text. ")
+        appendLine("Clean this raw transcript and return the final insertable text.")
+        appendLine()
+        if (preserveSpokenLanguage) {
+            appendLine(postProcessingLanguageInstruction(detectedLanguage))
+            appendLine()
+        }
+        appendLine("Follow these global cleanup rules:")
         append(cleanupPolicy)
-        append(" ")
-        if (detectedLanguage != null) append("Detected language: $detectedLanguage. ")
+        appendLine()
+        appendLine()
         if (dictionaryTerms.isNotEmpty()) {
-            append("Dictionary spelling constraints: ${dictionaryTerms.take(100).joinToString(", ")}. ")
+            appendLine("Dictionary spelling constraints: ${dictionaryTerms.take(100).joinToString(", ")}.")
+            appendLine()
         }
         append("Return only JSON with key final_text.")
     }
-    val user = "Style instruction:\n$stylePrompt\n\nTranscript:\n$rawTranscript"
+    val user = "Apply this formatting style:\n$stylePrompt\n\nRaw transcript:\n$rawTranscript"
     return JSONObject()
         .put("model", model)
         .put("temperature", 0.1)
@@ -134,6 +143,13 @@ internal fun postProcessingRequest(
         )
         .put("response_format", JSONObject().put("type", "json_object"))
 }
+
+private fun postProcessingLanguageInstruction(detectedLanguage: String?): String =
+    if (detectedLanguage.isNullOrBlank()) {
+        "Do not translate; keep the output in the same language as the transcript."
+    } else {
+        "Do not translate; keep the output in the detected/spoken language. Detected language: $detectedLanguage."
+    }
 
 internal fun parsePostProcessing(json: JSONObject, fallbackModel: String): PostProcessingResult {
     val content = json.chatContent()

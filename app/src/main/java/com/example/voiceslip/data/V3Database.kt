@@ -161,7 +161,7 @@ interface VoiceSlipDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun upsertPipelineConfig(config: PipelineConfigEntity)
 
-    @Query("SELECT * FROM styles ORDER BY isBuiltIn DESC, lower(name)")
+    @Query("SELECT * FROM styles ORDER BY isBuiltIn DESC, CASE id WHEN 'very_casual' THEN 0 WHEN 'casual' THEN 1 WHEN 'formal' THEN 2 WHEN 'excited' THEN 3 ELSE 4 END, lower(name)")
     fun listStyles(): List<StyleEntity>
 
     @Query("SELECT * FROM styles WHERE id = :id")
@@ -172,6 +172,9 @@ interface VoiceSlipDao {
 
     @Query("DELETE FROM styles WHERE id = :id AND isBuiltIn = 0")
     fun deleteCustomStyle(id: String)
+
+    @Query("DELETE FROM styles WHERE id IN (:ids) AND isBuiltIn = 1")
+    fun deleteBuiltInStyles(ids: List<String>)
 
     @Query("SELECT * FROM categories ORDER BY isPreset DESC, CASE id WHEN 'personal' THEN 0 WHEN 'work' THEN 1 WHEN 'email' THEN 2 WHEN 'other' THEN 3 ELSE 4 END, lower(name)")
     fun listCategories(): List<CategoryEntity>

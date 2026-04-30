@@ -98,7 +98,7 @@ import com.example.voiceslip.data.TranscriptionEngineId
 import com.example.voiceslip.data.AudioDirectEngineId
 import com.example.voiceslip.data.CATEGORY_OTHER
 import com.example.voiceslip.data.EngineDictionaryRoutingEntity
-import com.example.voiceslip.data.STYLE_CLEAN
+import com.example.voiceslip.data.STYLE_CASUAL
 import com.example.voiceslip.data.VoiceCategory
 import com.example.voiceslip.data.VoiceSlipRepository
 import com.example.voiceslip.data.VoiceStyle
@@ -160,11 +160,12 @@ class MainActivity : ComponentActivity() {
                     config = config,
                     audioFile = File(item.audioPath),
                     dictionaryTerms = repository.listDictionary().map { it.phrase },
-                    styleId = item.resolvedStyleId ?: STYLE_CLEAN,
-                    styleName = item.resolvedStyleName ?: "Clean",
-                    stylePrompt = item.stylePromptSnapshot ?: repository.getStyle(STYLE_CLEAN).effectivePrompt,
+                    styleId = item.resolvedStyleId ?: STYLE_CASUAL,
+                    styleName = item.resolvedStyleName ?: "Casual",
+                    stylePrompt = item.stylePromptSnapshot ?: repository.getStyle(STYLE_CASUAL).effectivePrompt,
                     cleanupPolicy = repository.getCleanupPolicy(),
-                    languageHints = repository.getLanguageHints()
+                    languageHints = repository.getLanguageHints(),
+                    preserveSpokenLanguage = repository.getPreserveSpokenLanguage()
                 )
                 outputGuardRejection(result.finalText, item.durationMillis)?.let { rejection ->
                     return@runCatching item.withPipelineResult(result, config, item.retryCount + 1).copy(
@@ -232,6 +233,7 @@ private fun VoiceSlipApp(
     var openRouterKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
     var pipelineConfig by remember { mutableStateOf(repository.getPipelineConfig()) }
     var languageHints by remember { mutableStateOf(repository.getLanguageHints()) }
+    var preserveSpokenLanguage by remember { mutableStateOf(repository.getPreserveSpokenLanguage()) }
     var groqModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.GROQ)) }
     var openRouterModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.OPENROUTER)) }
     var modelStatus by remember { mutableStateOf<String?>(null) }
@@ -252,6 +254,7 @@ private fun VoiceSlipApp(
         openRouterKey = secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()
         pipelineConfig = repository.getPipelineConfig()
         languageHints = repository.getLanguageHints()
+        preserveSpokenLanguage = repository.getPreserveSpokenLanguage()
         groqModels = repository.getCachedModels(ProviderId.GROQ)
         openRouterModels = repository.getCachedModels(ProviderId.OPENROUTER)
         appEnabled = repository.getAppEnabled()
@@ -368,6 +371,7 @@ private fun VoiceSlipApp(
                     config = pipelineConfig,
                     repository = repository,
                     languageHints = languageHints,
+                    preserveSpokenLanguage = preserveSpokenLanguage,
                     groqModels = groqModels,
                     openRouterModels = openRouterModels,
                     modelStatus = modelStatus,
@@ -381,6 +385,10 @@ private fun VoiceSlipApp(
                     onLanguageHintsChange = {
                         languageHints = it
                         repository.setLanguageHints(it)
+                    },
+                    onPreserveSpokenLanguageChange = {
+                        preserveSpokenLanguage = it
+                        repository.setPreserveSpokenLanguage(it)
                     },
                     onRefreshGroq = {
                         modelStatus = "Refreshing Groq models..."
@@ -624,6 +632,7 @@ private fun ModelsScreen(
     config: PipelineConfig,
     repository: VoiceSlipRepository,
     languageHints: String,
+    preserveSpokenLanguage: Boolean,
     groqModels: List<ModelOption>,
     openRouterModels: List<ModelOption>,
     modelStatus: String?,
@@ -631,6 +640,7 @@ private fun ModelsScreen(
     hasOpenRouterKey: Boolean,
     onConfigChange: (PipelineConfig) -> Unit,
     onLanguageHintsChange: (String) -> Unit,
+    onPreserveSpokenLanguageChange: (Boolean) -> Unit,
     onRefreshGroq: () -> Unit,
     onRefreshOpenRouter: () -> Unit
 ) {
@@ -656,19 +666,33 @@ private fun ModelsScreen(
             }
             item {
                 SettingsCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Preserve spoken language", fontWeight = FontWeight.SemiBold)
+                            Text("Keeps output in the language you dictated.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        SettingsSwitch(
+                            checked = preserveSpokenLanguage,
+                            onCheckedChange = onPreserveSpokenLanguageChange
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                     Text("Language hints", fontWeight = FontWeight.SemiBold)
                     OutlinedTextField(
                         value = languageHints,
                         onValueChange = onLanguageHintsChange,
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Optional hints") },
-                        singleLine = true
+                        singleLine = true,
+                        enabled = preserveSpokenLanguage
                     )
                     Text(
-                        if (languageHints.isBlank()) {
-                            "Do not translate; output in the spoken language."
+                        if (!preserveSpokenLanguage) {
+                            "Hints stay saved locally but are not sent while language preservation is off."
+                        } else if (languageHints.isBlank()) {
+                            "Prompts include: Do not translate; output in the spoken language."
                         } else {
-                            "Do not translate; output in the spoken language. Language hints: ${languageHints.trim()}."
+                            "Prompts include: Do not translate; output in the spoken language. Language hints: ${languageHints.trim()}."
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -951,12 +975,80 @@ private fun activePipelineText(config: PipelineConfig): String {
     }
 }
 
-private fun languageInstructionPreview(languageHints: String): String =
-    if (languageHints.isBlank()) {
+private fun languageInstructionPreview(languageHints: String, preserveSpokenLanguage: Boolean): String =
+    if (!preserveSpokenLanguage) {
+        "(omitted)"
+    } else if (languageHints.isBlank()) {
         "Do not translate; output in the spoken language."
     } else {
         "Do not translate; output in the spoken language. Language hints: ${languageHints.trim()}."
     }
+
+private fun postProcessingLanguagePreview(preserveSpokenLanguage: Boolean): String =
+    if (preserveSpokenLanguage) {
+        "Do not translate; keep the output in the detected/spoken language. Detected language: {{detected_language}}."
+    } else {
+        "(omitted)"
+    }
+
+private fun audioChatTranscriptionPromptPreview(languageHints: String, preserveSpokenLanguage: Boolean, dictionaryPrompt: String?): String =
+    buildString {
+        appendLine("Transcribe the attached audio faithfully. Return only the transcript text.")
+        appendLine()
+        if (preserveSpokenLanguage) {
+            appendLine(languageInstructionPreview(languageHints, true))
+            appendLine()
+        }
+        appendLine("Do not answer questions, summarize, add commentary, include labels, JSON, markdown, explanations, or alternatives.")
+        dictionaryPrompt?.let {
+            appendLine()
+            append(it)
+        }
+    }
+
+private fun postProcessingSystemPromptPreview(cleanupPolicy: String, preserveSpokenLanguage: Boolean, dictionarySize: Int): String =
+    buildString {
+        appendLine("Clean this raw transcript and return the final insertable text.")
+        appendLine()
+        if (preserveSpokenLanguage) {
+            appendLine(postProcessingLanguagePreview(true))
+            appendLine()
+        }
+        appendLine("Follow these global cleanup rules:")
+        appendLine(cleanupPolicy)
+        if (dictionarySize > 0) {
+            appendLine()
+            appendLine("Dictionary spelling constraints: {{dictionary_terms}}.")
+        }
+        appendLine()
+        append("Return only JSON with key final_text.")
+    }
+
+private fun audioDirectPromptPreview(
+    cleanupPolicy: String,
+    stylePrompt: String,
+    languageHints: String,
+    preserveSpokenLanguage: Boolean,
+    dictionarySize: Int
+): String = buildString {
+    appendLine("Transcribe the attached audio faithfully and return the final insertable text.")
+    appendLine()
+    if (preserveSpokenLanguage) {
+        appendLine(languageInstructionPreview(languageHints, true))
+        appendLine()
+    }
+    appendLine("Follow these global cleanup rules:")
+    appendLine(cleanupPolicy)
+    appendLine()
+    appendLine("Apply this formatting style:")
+    appendLine(stylePrompt)
+    appendLine()
+    appendLine("Return only the final text. Do not include labels, JSON, markdown, explanations, or alternatives.")
+    if (dictionarySize > 0) {
+        appendLine()
+        append("Use these spelling constraints when they match the audio: {{dictionary_terms}}.")
+    }
+}
 
 private fun pipelineModeExplanation(mode: PipelineMode): String {
     return when (mode) {
@@ -1010,6 +1102,7 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
     val transcriptionPlan = if (config.mode == PipelineMode.AUDIO_DIRECT) null else repository.dictionaryPlanForTranscription(config.transcriptionEngine, dictionary)
     val cleanupPolicy = repository.getCleanupPolicy()
     val languageHints = repository.getLanguageHints()
+    val preserveSpokenLanguage = repository.getPreserveSpokenLanguage()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Pipeline Preview") },
@@ -1028,13 +1121,17 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Endpoint: ${if (config.transcriptionEngine.provider == ProviderId.GROQ) "/openai/v1/audio/transcriptions" else if (config.transcriptionEngine.audioChat) "/v1/chat/completions" else "/v1/audio/transcriptions"}")
                         Text("Audio: WAV, 16 kHz mono")
                         if (config.transcriptionEngine.audioChat) {
-                            Text("Language: ${languageInstructionPreview(languageHints)}")
+                            Text("Language: ${languageInstructionPreview(languageHints, preserveSpokenLanguage)}")
                         }
                         transcriptionPlan?.let {
                             Text("Dictionary: ${it.mechanism}")
                             it.limit?.let { limit -> Text("Prompt limit: $limit chars") }
                             Text("Terms included: ${it.includedTerms} of ${it.totalTerms}")
-                            it.prompt?.let { prompt -> Text("Prompt sent:\n$prompt") }
+                            if (config.transcriptionEngine.audioChat) {
+                                Text("Prompt sent:\n${audioChatTranscriptionPromptPreview(languageHints, preserveSpokenLanguage, it.prompt)}")
+                            } else {
+                                it.prompt?.let { prompt -> Text("Prompt sent:\n$prompt") }
+                            }
                         }
                     }
                 }
@@ -1044,9 +1141,10 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Provider: ${config.postProcessingProvider.label}")
                         Text("Model: ${config.postProcessingModel.ifBlank { "(select model)" }}")
                         Text("Dictionary: ${dictionary.size} of ${dictionary.size} terms included as spelling constraints")
+                        Text("Language: ${postProcessingLanguagePreview(preserveSpokenLanguage)}")
                         Text("Resolved style: {{style_prompt}}")
-                        Text("System prompt:\nClean this raw transcript and return the final insertable text. $cleanupPolicy")
-                        Text("User prompt:\nStyle instruction:\n${resolution.stylePrompt}\n\nTranscript:\n{{raw_transcript}}")
+                        Text("System prompt:\n${postProcessingSystemPromptPreview(cleanupPolicy, preserveSpokenLanguage, dictionary.size)}")
+                        Text("User prompt:\nApply this formatting style:\n${resolution.stylePrompt}\n\nRaw transcript:\n{{raw_transcript}}")
                     }
                 }
                 if (config.mode == PipelineMode.AUDIO_DIRECT) {
@@ -1055,9 +1153,9 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Provider: ${config.audioDirectEngine.provider.label}")
                         Text("Model: ${config.audioDirectEngine.model}")
                         Text("Dictionary: full dictionary included in prompt")
-                        Text("Language: ${languageInstructionPreview(languageHints)}")
+                        Text("Language: ${languageInstructionPreview(languageHints, preserveSpokenLanguage)}")
                         Text("Resolved style: {{style_prompt}}")
-                        Text("Prompt:\nListen to this audio and return the final insertable text. $cleanupPolicy\nStyle instruction:\n${resolution.stylePrompt}")
+                        Text("Prompt:\n${audioDirectPromptPreview(cleanupPolicy, resolution.stylePrompt, languageHints, preserveSpokenLanguage, dictionary.size)}")
                     }
                 }
                 item {
@@ -1132,7 +1230,16 @@ private fun StyleScreen(repository: VoiceSlipRepository) {
             refreshKey = refreshKey,
             onBack = { route = current.chooseForCategoryId?.let { StyleRoute.CategoryDetail(it) } ?: StyleRoute.Home; reload() },
             onEdit = { route = StyleRoute.StyleEditor(it, current) },
+            onAdd = { route = StyleRoute.NewStyle(current) },
             onReload = ::reload
+        )
+        is StyleRoute.NewStyle -> NewStyleScreen(
+            repository = repository,
+            onBack = { route = current.returnTo; reload() },
+            onCreated = { styleId ->
+                reload()
+                route = StyleRoute.StyleEditor(styleId, current.returnTo)
+            }
         )
         is StyleRoute.StyleEditor -> StyleEditorScreen(
             repository = repository,
@@ -1157,6 +1264,7 @@ private sealed class StyleRoute {
     data object AllApps : StyleRoute()
     data class AppCategoryPicker(val packageName: String, val returnTo: StyleRoute) : StyleRoute()
     data class StyleLibrary(val chooseForCategoryId: String? = null) : StyleRoute()
+    data class NewStyle(val returnTo: StyleRoute) : StyleRoute()
     data class StyleEditor(val styleId: String, val returnTo: StyleRoute) : StyleRoute()
     data object PromptSettings : StyleRoute()
 }
@@ -1203,7 +1311,7 @@ private fun StyleHomeScreen(
             Text("Categories", fontWeight = FontWeight.SemiBold)
         }
         items(categories, key = { it.id }) { category ->
-            val styleName = styles.firstOrNull { it.id == category.styleId }?.name ?: "Clean"
+            val styleName = styles.firstOrNull { it.id == category.styleId }?.name ?: "Casual"
             val categoryApps = apps.filter {
                 if (category.id == CATEGORY_OTHER) it.categoryId == null else it.categoryId == category.id
             }
@@ -1294,7 +1402,7 @@ private fun CategoryDetailScreen(
     val categories = remember(refreshKey) { repository.listCategories() }
     val category = categories.firstOrNull { it.id == categoryId } ?: categories.first { it.id == CATEGORY_OTHER }
     val styles = remember(refreshKey) { repository.listStyles() }
-    val style = styles.firstOrNull { it.id == category.styleId } ?: repository.getStyle(STYLE_CLEAN)
+    val style = styles.firstOrNull { it.id == category.styleId } ?: repository.getStyle(STYLE_CASUAL)
     var query by remember { mutableStateOf("") }
     val apps = remember(refreshKey, query) { repository.listInstalledApps(query) }
     var pending by remember { mutableStateOf<PendingAppChange?>(null) }
@@ -1638,16 +1746,20 @@ private fun StyleLibraryScreen(
     refreshKey: Int,
     onBack: () -> Unit,
     onEdit: (String) -> Unit,
+    onAdd: () -> Unit,
     onReload: () -> Unit
 ) {
     val styles = remember(refreshKey) { repository.listStyles() }
     val category = remember(refreshKey, chooseForCategoryId) { chooseForCategoryId?.let { id -> repository.listCategories().firstOrNull { it.id == id } } }
-    var newName by remember { mutableStateOf("") }
-    var newPrompt by remember { mutableStateOf("") }
     BackHandler { onBack() }
     LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { ScreenHeader(if (chooseForCategoryId == null) "Style Library" else "Choose Style", onBack) }
         item { Text(if (category == null) "Manage reusable style prompts." else "For ${category.name}", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (chooseForCategoryId == null) {
+            item {
+                Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("Add style") }
+            }
+        }
         items(styles, key = { it.id }) { style ->
             StyleRow(
                 style = style,
@@ -1662,22 +1774,6 @@ private fun StyleLibraryScreen(
                 }
             )
         }
-        if (chooseForCategoryId == null) {
-            item {
-                SettingsCard {
-                    Text("New custom style", fontWeight = FontWeight.SemiBold)
-                    OutlinedTextField(newName, { newName = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Name") }, singleLine = true)
-                    OutlinedTextField(newPrompt, { newPrompt = it }, modifier = Modifier.fillMaxWidth().height(160.dp), label = { Text("Prompt") })
-                    Button(onClick = {
-                        val style = repository.createCustomStyle(newName, newPrompt)
-                        newName = ""
-                        newPrompt = ""
-                        onReload()
-                        onEdit(style.id)
-                    }, enabled = newName.isNotBlank() && newPrompt.isNotBlank()) { Text("Create style") }
-                }
-            }
-        }
     }
 }
 
@@ -1686,11 +1782,70 @@ private fun StyleRow(style: VoiceStyle, selected: Boolean, chooseMode: Boolean, 
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(style.name, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(style.name, fontWeight = FontWeight.SemiBold)
+                    when {
+                        style.isBuiltIn && style.userPromptOverride != null -> StyleLabel("Modified")
+                        !style.isBuiltIn -> StyleLabel("Custom")
+                    }
+                }
                 Text(style.effectivePrompt, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (chooseMode && selected) Text("Selected", color = MaterialTheme.colorScheme.primary)
         }
+    }
+}
+
+@Composable
+private fun StyleLabel(text: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = RoundedCornerShape(6.dp)
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+}
+
+@Composable
+private fun NewStyleScreen(repository: VoiceSlipRepository, onBack: () -> Unit, onCreated: (String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var prompt by remember { mutableStateOf("") }
+    var showDiscard by remember { mutableStateOf(false) }
+    val dirty = name.isNotBlank() || prompt.isNotBlank()
+    fun requestBack() { if (dirty) showDiscard = true else onBack() }
+    BackHandler { requestBack() }
+    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { ScreenHeader("Add style", ::requestBack) }
+        item {
+            SettingsCard {
+                OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Name") }, singleLine = true)
+                OutlinedTextField(prompt, { prompt = it }, modifier = Modifier.fillMaxWidth().height(320.dp), label = { Text("Prompt editor") })
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            val style = repository.createCustomStyle(name, prompt)
+                            onCreated(style.id)
+                        },
+                        enabled = name.isNotBlank() && prompt.isNotBlank()
+                    ) { Text("Save") }
+                    OutlinedButton(onClick = ::requestBack) { Text("Cancel") }
+                }
+            }
+        }
+    }
+    if (showDiscard) {
+        AlertDialog(
+            onDismissRequest = { showDiscard = false },
+            title = { Text("Discard style?") },
+            text = { Text("Your unsaved style will be lost.") },
+            confirmButton = { Button(onClick = onBack) { Text("Discard") } },
+            dismissButton = { TextButton(onClick = { showDiscard = false }) { Text("Cancel") } }
+        )
     }
 }
 
@@ -1760,7 +1915,7 @@ private fun StyleEditorScreen(repository: VoiceSlipRepository, styleId: String, 
         AlertDialog(
             onDismissRequest = { showDelete = false },
             title = { Text("Delete style?") },
-            text = { Text("Categories using this style will fall back to Clean.") },
+            text = { Text("Categories using this style will fall back to Casual.") },
             confirmButton = {
                 Button(onClick = {
                     repository.deleteCustomStyle(style.id)

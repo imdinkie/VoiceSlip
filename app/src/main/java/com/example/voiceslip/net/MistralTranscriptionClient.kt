@@ -61,13 +61,19 @@ class MistralTranscriptionClient {
         audioFile: File,
         engine: TranscriptionEngineId,
         dictionaryTerms: List<String>,
-        languageHints: String
+        languageHints: String,
+        preserveSpokenLanguage: Boolean
     ): TranscriptionResult {
         val prompt = buildString {
-            append("Transcribe the attached audio exactly. Return only the transcript text. ")
-            append(sameLanguageInstruction(languageHints))
-            append(" Do not answer questions, summarize, or add commentary. ")
+            appendLine("Transcribe the attached audio faithfully. Return only the transcript text.")
+            appendLine()
+            if (preserveSpokenLanguage) {
+                appendLine(sameLanguageInstruction(languageHints))
+                appendLine()
+            }
+            appendLine("Do not answer questions, summarize, add commentary, include labels, JSON, markdown, explanations, or alternatives.")
             if (dictionaryTerms.isNotEmpty()) {
+                appendLine()
                 append("Use these spelling constraints when they match the audio: ")
                 append(dictionaryTerms.take(100).joinToString(", "))
                 append(".")
@@ -90,18 +96,27 @@ class MistralTranscriptionClient {
         stylePrompt: String,
         cleanupPolicy: String,
         dictionaryTerms: List<String>,
-        languageHints: String
+        languageHints: String,
+        preserveSpokenLanguage: Boolean
     ): DirectAudioResult {
         val prompt = buildString {
-            append("Listen to the attached audio and return the final text to insert. ")
-            append(sameLanguageInstruction(languageHints))
-            append(" ")
+            appendLine("Transcribe the attached audio faithfully and return the final insertable text.")
+            appendLine()
+            if (preserveSpokenLanguage) {
+                appendLine(sameLanguageInstruction(languageHints))
+                appendLine()
+            }
+            appendLine("Follow these global cleanup rules:")
             append(cleanupPolicy)
-            append(" Style instruction: ")
+            appendLine()
+            appendLine()
+            appendLine("Apply this formatting style:")
             append(stylePrompt)
-            append(" ")
-            append("Return only the final insertable text. ")
+            appendLine()
+            appendLine()
+            appendLine("Return only the final text. Do not include labels, JSON, markdown, explanations, or alternatives.")
             if (dictionaryTerms.isNotEmpty()) {
+                appendLine()
                 append("Use these spelling constraints when they match the audio: ")
                 append(dictionaryTerms.take(100).joinToString(", "))
                 append(".")

@@ -459,7 +459,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     styleName = style.styleName,
                     stylePrompt = style.stylePrompt,
                     cleanupPolicy = repository.getCleanupPolicy(),
-                    languageHints = repository.getLanguageHints()
+                    languageHints = repository.getLanguageHints(),
+                    preserveSpokenLanguage = repository.getPreserveSpokenLanguage()
                 )
                 val text = pipeline.finalText
                 outputGuardRejection(text, result.durationMillis)?.let { rejection ->
