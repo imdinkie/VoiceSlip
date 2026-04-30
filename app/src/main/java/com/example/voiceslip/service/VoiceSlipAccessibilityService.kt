@@ -45,6 +45,8 @@ import com.example.voiceslip.data.StyleResolution
 import com.example.voiceslip.data.VoiceSlipRepository
 import com.example.voiceslip.net.PipelineException
 import com.example.voiceslip.net.PipelineExecutor
+import com.example.voiceslip.net.PipelineResult
+import com.example.voiceslip.net.outputGuardRejection
 import java.io.File
 import java.util.UUID
 import kotlin.math.abs
@@ -456,9 +458,28 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     styleId = style.styleId,
                     styleName = style.styleName,
                     stylePrompt = style.stylePrompt,
-                    cleanupPolicy = repository.getCleanupPolicy()
+                    cleanupPolicy = repository.getCleanupPolicy(),
+                    languageHints = repository.getLanguageHints()
                 )
                 val text = pipeline.finalText
+                outputGuardRejection(text, result.durationMillis)?.let { rejection ->
+                    return@runCatching item.withPipelineResult(pipeline, config).copy(
+                        status = RecordingStatus.FAILED,
+                        transcript = null,
+                        error = rejection,
+                        errorStage = "output_guard",
+                        targetPackage = style.targetPackage,
+                        targetAppLabel = style.targetAppLabel,
+                        resolvedCategoryId = style.categoryId,
+                        resolvedCategoryName = style.categoryName,
+                        resolvedStyleId = style.styleId,
+                        resolvedStyleName = style.styleName,
+                        stylePromptSnapshot = style.stylePrompt,
+                        dictionarySnapshot = org.json.JSONArray(dictionary).toString(),
+                        pipelineConfigSnapshot = repository.pipelineConfigSnapshot(config),
+                        dictionaryRoutingSnapshot = repository.dictionaryRoutingSnapshot(config, dictionary)
+                    )
+                }
                 val insertionResult = mainHandler.postAndWait { insertOrCopy(text) }
                 item.copy(
                     status = RecordingStatus.SUCCEEDED,
@@ -619,10 +640,28 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             PipelineMode.PURE_TRANSCRIPTION -> config.transcriptionEngine.displayName
             PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ->
                 "${config.transcriptionEngine.displayName} -> ${config.postProcessingProvider.label} ${config.postProcessingModel}"
-            PipelineMode.AUDIO_DIRECT -> "${config.audioDirectEngine.displayName} direct"
+            PipelineMode.AUDIO_DIRECT -> config.audioDirectEngine.displayName
         }
     }
 }
+
+private fun HistoryItem.withPipelineResult(result: PipelineResult, config: PipelineConfig): HistoryItem = copy(
+    rawTranscript = result.rawTranscript,
+    finalText = result.finalText,
+    detectedLanguage = result.detectedLanguage,
+    provider = result.provider,
+    model = result.model,
+    pipelineMode = config.mode.name,
+    transcriptionProvider = result.transcriptionProvider,
+    transcriptionModel = result.transcriptionModel,
+    audioModelProvider = result.audioModelProvider,
+    audioModel = result.audioModel,
+    postProcessingProvider = result.postProcessingProvider,
+    postProcessingModel = result.postProcessingModel,
+    stylePreset = result.stylePreset,
+    pipelineSummary = result.pipelineSummary,
+    metadataJson = result.metadataJson
+)
 
 private fun <T> Handler.postAndWait(block: () -> T): T {
     if (Looper.myLooper() == Looper.getMainLooper()) return block()

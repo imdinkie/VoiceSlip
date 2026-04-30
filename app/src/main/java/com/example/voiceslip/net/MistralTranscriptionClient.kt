@@ -60,24 +60,24 @@ class MistralTranscriptionClient {
         apiKey: String,
         audioFile: File,
         engine: TranscriptionEngineId,
-        dictionaryTerms: List<String>
+        dictionaryTerms: List<String>,
+        languageHints: String
     ): TranscriptionResult {
         val prompt = buildString {
-            append("Transcribe the attached audio exactly. Return only a JSON object with keys ")
-            append("\"transcript\" and \"language\". Do not answer questions, summarize, or add commentary. ")
+            append("Transcribe the attached audio exactly. Return only the transcript text. ")
+            append(sameLanguageInstruction(languageHints))
+            append(" Do not answer questions, summarize, or add commentary. ")
             if (dictionaryTerms.isNotEmpty()) {
                 append("Use these spelling constraints when they match the audio: ")
                 append(dictionaryTerms.take(100).joinToString(", "))
                 append(".")
             }
         }
-        val json = postAudioChat(apiKey, engine.model, audioFile, prompt, jsonMode = true)
+        val json = postAudioChat(apiKey, engine.model, audioFile, prompt)
         val content = json.chatContent()
-        val parsed = runCatching { JSONObject(content) }.getOrNull()
-        val transcript = parsed?.optString("transcript")?.trim().orEmpty().ifBlank { content.trim() }
         return TranscriptionResult(
-            text = transcript,
-            language = parsed?.optString("language")?.ifBlank { null },
+            text = content.trim(),
+            language = null,
             model = json.optString("model", engine.model),
             metadata = json.toString()
         )
@@ -89,27 +89,29 @@ class MistralTranscriptionClient {
         engine: AudioDirectEngineId,
         stylePrompt: String,
         cleanupPolicy: String,
-        dictionaryTerms: List<String>
+        dictionaryTerms: List<String>,
+        languageHints: String
     ): DirectAudioResult {
         val prompt = buildString {
             append("Listen to the attached audio and return the final text to insert. ")
+            append(sameLanguageInstruction(languageHints))
+            append(" ")
             append(cleanupPolicy)
             append(" Style instruction: ")
             append(stylePrompt)
             append(" ")
-            append("Return only a JSON object with keys \"final_text\" and \"language\". ")
+            append("Return only the final insertable text. ")
             if (dictionaryTerms.isNotEmpty()) {
                 append("Use these spelling constraints when they match the audio: ")
                 append(dictionaryTerms.take(100).joinToString(", "))
                 append(".")
             }
         }
-        val json = postAudioChat(apiKey, engine.model, audioFile, prompt, jsonMode = true)
+        val json = postAudioChat(apiKey, engine.model, audioFile, prompt)
         val content = json.chatContent()
-        val parsed = runCatching { JSONObject(content) }.getOrNull()
         return DirectAudioResult(
-            finalText = parsed?.optString("final_text")?.trim().orEmpty().ifBlank { content.trim() },
-            language = parsed?.optString("language")?.ifBlank { null },
+            finalText = content.trim(),
+            language = null,
             model = json.optString("model", engine.model),
             metadata = json.toString()
         )
@@ -119,12 +121,12 @@ class MistralTranscriptionClient {
         apiKey: String,
         model: String,
         audioFile: File,
-        prompt: String,
-        jsonMode: Boolean
+        prompt: String
     ): JSONObject {
         val inputAudio = uploadAudioAndGetSignedUrl(apiKey, audioFile)
         val request = JSONObject()
             .put("model", model)
+            .put("max_tokens", 6000)
             .put(
                 "messages",
                 org.json.JSONArray().put(
@@ -138,7 +140,6 @@ class MistralTranscriptionClient {
                         )
                 )
             )
-        if (jsonMode) request.put("response_format", JSONObject().put("type", "json_object"))
         val body = postJson("https://api.mistral.ai/v1/chat/completions", apiKey, request)
         return JSONObject(body)
     }
@@ -170,6 +171,15 @@ class MistralTranscriptionClient {
         val fileId = JSONObject(body).getString("id")
         val signedUrlBody = getJson("https://api.mistral.ai/v1/files/$fileId/url?expiry=24", apiKey)
         return JSONObject(signedUrlBody).getString("url")
+    }
+}
+
+private fun sameLanguageInstruction(languageHints: String): String {
+    val cleanHints = languageHints.trim()
+    return if (cleanHints.isBlank()) {
+        "Do not translate; output in the spoken language."
+    } else {
+        "Do not translate; output in the spoken language. Language hints: $cleanHints."
     }
 }
 

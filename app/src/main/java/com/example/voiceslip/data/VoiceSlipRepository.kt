@@ -59,6 +59,12 @@ class VoiceSlipRepository(context: Context) {
         dao.upsertPipelineConfig(config.toEntity())
     }
 
+    fun getLanguageHints(): String = prefs.getString("language_hints", "").orEmpty()
+
+    fun setLanguageHints(hints: String) {
+        prefs.edit().putString("language_hints", hints.trim()).apply()
+    }
+
     fun getCachedModels(provider: ProviderId): List<ModelOption> {
         val array = JSONArray(prefs.getString("${provider.name.lowercase()}_models", "[]"))
         return (0 until array.length()).mapNotNull { index ->
@@ -173,6 +179,17 @@ class VoiceSlipRepository(context: Context) {
         apps.forEach { applySeedIfEligible(it.packageName) }
     }
 
+    fun installedAppCacheState(): InstalledAppCacheState {
+        val apps = dao.listInstalledApps()
+        val updatedAt = apps.maxOfOrNull { it.updatedAtMillis }
+        return InstalledAppCacheState(
+            appCount = apps.size,
+            lastUpdatedAtMillis = updatedAt,
+            isEmpty = apps.isEmpty(),
+            isStale = updatedAt == null || System.currentTimeMillis() - updatedAt > APP_CACHE_STALE_MS
+        )
+    }
+
     fun noteRecentApp(packageName: String?) {
         val pkg = packageName?.takeIf { it.isNotBlank() && it != appContext.packageName } ?: return
         val existing = dao.listInstalledApps().firstOrNull { it.packageName == pkg }
@@ -189,7 +206,6 @@ class VoiceSlipRepository(context: Context) {
     }
 
     fun listInstalledApps(query: String = ""): List<InstalledAppInfo> {
-        if (dao.listInstalledApps().isEmpty()) refreshInstalledApps()
         val categories = dao.listCategories().associateBy { it.id }
         val assignments = dao.listAssignments().associateBy { it.packageName }
         return dao.listInstalledApps()
@@ -287,6 +303,7 @@ class VoiceSlipRepository(context: Context) {
         .put("audioDirectEngine", config.audioDirectEngine.name)
         .put("postProcessingProvider", config.postProcessingProvider.name)
         .put("postProcessingModel", config.postProcessingModel)
+        .put("languageHints", getLanguageHints())
         .toString()
 
     private fun seedDefaults() {
@@ -339,6 +356,15 @@ class VoiceSlipRepository(context: Context) {
         }.getOrNull()
     }
 }
+
+data class InstalledAppCacheState(
+    val appCount: Int,
+    val lastUpdatedAtMillis: Long?,
+    val isEmpty: Boolean,
+    val isStale: Boolean
+)
+
+private const val APP_CACHE_STALE_MS = 24L * 60L * 60L * 1000L
 
 private fun Drawable.toBitmap(width: Int, height: Int): Bitmap {
     if (this is BitmapDrawable && bitmap != null) return Bitmap.createScaledBitmap(bitmap, width, height, true)

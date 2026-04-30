@@ -19,12 +19,13 @@ class PipelineExecutor(
         styleId: String = "raw",
         styleName: String = "Raw",
         stylePrompt: String = "Return the transcript with no intentional rewrite.",
-        cleanupPolicy: String = defaultCleanupPolicy()
+        cleanupPolicy: String = defaultCleanupPolicy(),
+        languageHints: String = ""
     ): PipelineResult {
         validate(config)
         return when (config.mode) {
             PipelineMode.PURE_TRANSCRIPTION -> {
-                val transcript = runTranscription(config.transcriptionEngine, audioFile, transcriptionDictionaryTerms)
+                val transcript = runTranscription(config.transcriptionEngine, audioFile, transcriptionDictionaryTerms, languageHints)
                 PipelineResult(
                     rawTranscript = transcript.text,
                     finalText = transcript.text,
@@ -39,7 +40,7 @@ class PipelineExecutor(
                 )
             }
             PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING -> {
-                val transcript = runTranscription(config.transcriptionEngine, audioFile, transcriptionDictionaryTerms)
+                val transcript = runTranscription(config.transcriptionEngine, audioFile, transcriptionDictionaryTerms, languageHints)
                 val processed = runPostProcessing(
                     config.postProcessingProvider,
                     config.postProcessingModel,
@@ -65,12 +66,12 @@ class PipelineExecutor(
                 )
             }
             PipelineMode.AUDIO_DIRECT -> {
-                val direct = runAudioDirect(config.audioDirectEngine, audioFile, dictionaryTerms, stylePrompt, cleanupPolicy)
+                val direct = runAudioDirect(config.audioDirectEngine, audioFile, dictionaryTerms, stylePrompt, cleanupPolicy, languageHints)
                 PipelineResult(
                     rawTranscript = null,
                     finalText = direct.result.finalText,
                     detectedLanguage = direct.result.language,
-                    pipelineSummary = "${config.audioDirectEngine.displayName} direct",
+                    pipelineSummary = config.audioDirectEngine.displayName,
                     provider = direct.engine.provider.name.lowercase(),
                     model = direct.result.model,
                     audioModelProvider = direct.engine.provider.name,
@@ -96,13 +97,14 @@ class PipelineExecutor(
     private fun runTranscription(
         engine: TranscriptionEngineId,
         audioFile: File,
-        dictionaryTerms: List<String>
+        dictionaryTerms: List<String>,
+        languageHints: String
     ): TranscriptWithEngine {
         val key = keyProvider(engine.provider).orEmpty()
         val result = when (engine.provider) {
             ProviderId.MISTRAL -> {
                 if (engine.audioChat) {
-                    MistralTranscriptionClient().transcribeWithAudioChat(key, audioFile, engine, dictionaryTerms)
+                    MistralTranscriptionClient().transcribeWithAudioChat(key, audioFile, engine, dictionaryTerms, languageHints)
                 } else {
                     MistralTranscriptionClient().transcribe(key, audioFile, dictionaryTerms, engine.model)
                 }
@@ -154,13 +156,54 @@ class PipelineExecutor(
         audioFile: File,
         dictionaryTerms: List<String>,
         stylePrompt: String,
-        cleanupPolicy: String
+        cleanupPolicy: String,
+        languageHints: String
     ): DirectWithEngine {
         val key = keyProvider(engine.provider).orEmpty()
-        val result = MistralTranscriptionClient().directAudio(key, audioFile, engine, stylePrompt, cleanupPolicy, dictionaryTerms)
+        val result = MistralTranscriptionClient().directAudio(key, audioFile, engine, stylePrompt, cleanupPolicy, dictionaryTerms, languageHints)
         if (result.finalText.isBlank()) throw PipelineException("audio_direct", "The audio model returned empty text.")
         return DirectWithEngine(engine, result)
     }
+}
+
+fun outputGuardRejection(text: String, durationMillis: Long): String? {
+    val clean = text.trim()
+    if (clean.length < 800) return null
+    repeatedLine(clean)?.let { return "Rejected model output because it repeated the same line excessively." }
+    repeatedPhrase(clean)?.let { return "Rejected model output because it contains extreme repeated phrasing." }
+    if (durationMillis > 0) {
+        val seconds = (durationMillis / 1000L).coerceAtLeast(1L)
+        val maxChars = maxOf(4_000L, seconds * 80L)
+        if (clean.length > maxChars && clean.length > 8_000) {
+            return "Rejected model output because ${clean.length} characters is wildly too long for a ${seconds}s recording."
+        }
+    }
+    return null
+}
+
+private fun repeatedLine(text: String): Boolean {
+    val lines = text.lines().map { it.trim() }.filter { it.length >= 20 }
+    if (lines.size < 8) return false
+    return lines.groupingBy { it }.eachCount().values.any { it >= 8 }
+}
+
+private fun repeatedPhrase(text: String): Boolean {
+    val words = Regex("\\S+").findAll(text.lowercase()).map { it.value.trim(',', '.', '!', '?', ';', ':', '"', '\'') }.filter { it.length > 1 }.toList()
+    if (words.size < 120) return false
+    for (size in listOf(3, 4, 5, 6, 8, 10)) {
+        var repeatCount = 1
+        var previous: List<String>? = null
+        words.windowed(size, size, partialWindows = false).forEach { chunk ->
+            if (chunk == previous) {
+                repeatCount++
+                if (repeatCount >= 10) return true
+            } else {
+                previous = chunk
+                repeatCount = 1
+            }
+        }
+    }
+    return false
 }
 
 internal fun defaultCleanupPolicy(): String =

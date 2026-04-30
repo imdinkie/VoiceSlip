@@ -24,8 +24,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -65,6 +65,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -104,11 +105,14 @@ import com.example.voiceslip.net.GroqClient
 import com.example.voiceslip.net.OpenRouterClient
 import com.example.voiceslip.net.PipelineException
 import com.example.voiceslip.net.PipelineExecutor
+import com.example.voiceslip.net.PipelineResult
+import com.example.voiceslip.net.outputGuardRejection
 import com.example.voiceslip.service.VoiceSlipAccessibilityService
 import com.example.voiceslip.ui.theme.VoiceSlipTheme
 import java.io.File
 import java.util.Date
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var repository: VoiceSlipRepository
@@ -158,8 +162,17 @@ class MainActivity : ComponentActivity() {
                     styleId = item.resolvedStyleId ?: STYLE_CLEAN,
                     styleName = item.resolvedStyleName ?: "Clean",
                     stylePrompt = item.stylePromptSnapshot ?: repository.getStyle(STYLE_CLEAN).effectivePrompt,
-                    cleanupPolicy = repository.getCleanupPolicy()
+                    cleanupPolicy = repository.getCleanupPolicy(),
+                    languageHints = repository.getLanguageHints()
                 )
+                outputGuardRejection(result.finalText, item.durationMillis)?.let { rejection ->
+                    return@runCatching item.withPipelineResult(result, config, item.retryCount + 1).copy(
+                        status = RecordingStatus.FAILED,
+                        transcript = null,
+                        error = rejection,
+                        errorStage = "output_guard"
+                    )
+                }
                 item.copy(
                     status = RecordingStatus.SUCCEEDED,
                     transcript = result.finalText,
@@ -217,6 +230,7 @@ private fun VoiceSlipApp(
     var groqKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.GROQ).orEmpty()) }
     var openRouterKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
     var pipelineConfig by remember { mutableStateOf(repository.getPipelineConfig()) }
+    var languageHints by remember { mutableStateOf(repository.getLanguageHints()) }
     var groqModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.GROQ)) }
     var openRouterModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.OPENROUTER)) }
     var modelStatus by remember { mutableStateOf<String?>(null) }
@@ -236,6 +250,7 @@ private fun VoiceSlipApp(
         groqKey = secretStore.getApiKey(ProviderId.GROQ).orEmpty()
         openRouterKey = secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()
         pipelineConfig = repository.getPipelineConfig()
+        languageHints = repository.getLanguageHints()
         groqModels = repository.getCachedModels(ProviderId.GROQ)
         openRouterModels = repository.getCachedModels(ProviderId.OPENROUTER)
         appEnabled = repository.getAppEnabled()
@@ -351,6 +366,7 @@ private fun VoiceSlipApp(
                 1 -> ModelsScreen(
                     config = pipelineConfig,
                     repository = repository,
+                    languageHints = languageHints,
                     groqModels = groqModels,
                     openRouterModels = openRouterModels,
                     modelStatus = modelStatus,
@@ -360,6 +376,10 @@ private fun VoiceSlipApp(
                         pipelineConfig = it
                         repository.setPipelineConfig(it)
                         refreshTick++
+                    },
+                    onLanguageHintsChange = {
+                        languageHints = it
+                        repository.setLanguageHints(it)
                     },
                     onRefreshGroq = {
                         modelStatus = "Refreshing Groq models..."
@@ -602,12 +622,14 @@ private fun ProviderKeyField(label: String, value: String, onChange: (String) ->
 private fun ModelsScreen(
     config: PipelineConfig,
     repository: VoiceSlipRepository,
+    languageHints: String,
     groqModels: List<ModelOption>,
     openRouterModels: List<ModelOption>,
     modelStatus: String?,
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
     onConfigChange: (PipelineConfig) -> Unit,
+    onLanguageHintsChange: (String) -> Unit,
     onRefreshGroq: () -> Unit,
     onRefreshOpenRouter: () -> Unit
 ) {
@@ -629,6 +651,26 @@ private fun ModelsScreen(
                         }
                         OutlinedButton(onClick = { showPreview = true }) { Text("Preview") }
                     }
+                }
+            }
+            item {
+                SettingsCard {
+                    Text("Language hints", fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(
+                        value = languageHints,
+                        onValueChange = onLanguageHintsChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Optional hints") },
+                        singleLine = true
+                    )
+                    Text(
+                        if (languageHints.isBlank()) {
+                            "Do not translate; output in the spoken language."
+                        } else {
+                            "Do not translate; output in the spoken language. Language hints: ${languageHints.trim()}."
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             item {
@@ -851,9 +893,14 @@ private fun AudioDirectChoiceColumn(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         AudioDirectEngineId.entries.forEach { engine ->
+            val warning = if (engine == AudioDirectEngineId.MISTRAL_VOXTRAL_MINI_AUDIO) {
+                " · Not recommended: prone to formatting and repetition errors."
+            } else {
+                ""
+            }
             EngineChoiceButton(
                 title = engine.displayName,
-                detail = "${engine.provider.label} · ${engine.model} · audio chat -> final text",
+                detail = "${engine.provider.label} · ${engine.model} · audio chat -> final text$warning",
                 selected = engine == selected,
                 onClick = { onSelect(engine) }
             )
@@ -902,6 +949,13 @@ private fun activePipelineText(config: PipelineConfig): String {
             "Active: ${config.audioDirectEngine.displayName} (${config.audioDirectEngine.model}) with the recording-start style prompt in one call."
     }
 }
+
+private fun languageInstructionPreview(languageHints: String): String =
+    if (languageHints.isBlank()) {
+        "Do not translate; output in the spoken language."
+    } else {
+        "Do not translate; output in the spoken language. Language hints: ${languageHints.trim()}."
+    }
 
 private fun pipelineModeExplanation(mode: PipelineMode): String {
     return when (mode) {
@@ -954,6 +1008,7 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
     val resolution = repository.resolveStyleForPackage(null)
     val transcriptionPlan = if (config.mode == PipelineMode.AUDIO_DIRECT) null else repository.dictionaryPlanForTranscription(config.transcriptionEngine, dictionary)
     val cleanupPolicy = repository.getCleanupPolicy()
+    val languageHints = repository.getLanguageHints()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Pipeline Preview") },
@@ -971,6 +1026,9 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Model: ${config.transcriptionEngine.model}")
                         Text("Endpoint: ${if (config.transcriptionEngine.provider == ProviderId.GROQ) "/openai/v1/audio/transcriptions" else if (config.transcriptionEngine.audioChat) "/v1/chat/completions" else "/v1/audio/transcriptions"}")
                         Text("Audio: WAV, 16 kHz mono")
+                        if (config.transcriptionEngine.audioChat) {
+                            Text("Language: ${languageInstructionPreview(languageHints)}")
+                        }
                         transcriptionPlan?.let {
                             Text("Dictionary: ${it.mechanism}")
                             it.limit?.let { limit -> Text("Prompt limit: $limit chars") }
@@ -996,6 +1054,7 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Provider: ${config.audioDirectEngine.provider.label}")
                         Text("Model: ${config.audioDirectEngine.model}")
                         Text("Dictionary: full dictionary included in prompt")
+                        Text("Language: ${languageInstructionPreview(languageHints)}")
                         Text("Resolved style: {{style_prompt}}")
                         Text("Prompt:\nListen to this audio and return the final insertable text. $cleanupPolicy\nStyle instruction:\n${resolution.stylePrompt}")
                     }
@@ -1012,32 +1071,58 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
 
 @Composable
 private fun StyleScreen(repository: VoiceSlipRepository) {
+    val context = LocalContext.current
     var route by remember { mutableStateOf<StyleRoute>(StyleRoute.Home) }
     var refreshKey by remember { mutableIntStateOf(0) }
+    var refreshState by remember { mutableStateOf(StyleRefreshState.from(repository.installedAppCacheState())) }
     fun reload() { refreshKey++ }
-    LaunchedEffect(route) {
-        if (route is StyleRoute.CategoryDetail || route is StyleRoute.AllApps || route is StyleRoute.Home) {
-            repository.refreshInstalledApps()
-            reload()
+    fun refreshApps(force: Boolean) {
+        val cache = repository.installedAppCacheState()
+        if (!force && !cache.isEmpty && !cache.isStale) {
+            refreshState = StyleRefreshState.from(cache)
+            return
         }
+        if (refreshState.isRefreshing) return
+        refreshState = StyleRefreshState.from(cache).copy(isRefreshing = true, message = "Refreshing apps...")
+        Thread {
+            val result = runCatching { repository.refreshInstalledApps() }
+            val updated = StyleRefreshState.from(repository.installedAppCacheState()).copy(
+                isRefreshing = false,
+                message = result.fold(
+                    onSuccess = { "Apps refreshed" },
+                    onFailure = { "Refresh failed: ${it.message}" }
+                )
+            )
+            (context as? ComponentActivity)?.runOnUiThread {
+                refreshState = updated
+                reload()
+            }
+        }.start()
+    }
+    LaunchedEffect(Unit) {
+        refreshApps(force = false)
     }
     when (val current = route) {
-        StyleRoute.Home -> StyleHomeScreen(repository, refreshKey, onRoute = { route = it }, onReload = ::reload)
+        StyleRoute.Home -> StyleHomeScreen(repository, refreshKey, refreshState, onRoute = { route = it }, onReload = ::reload)
         is StyleRoute.CategoryDetail -> CategoryDetailScreen(
             repository = repository,
             categoryId = current.categoryId,
             refreshKey = refreshKey,
+            refreshState = refreshState,
             onBack = { route = StyleRoute.Home; reload() },
             onChooseStyle = { route = StyleRoute.StyleLibrary(chooseForCategoryId = current.categoryId) },
             onEditStyle = { route = StyleRoute.StyleEditor(it, StyleRoute.CategoryDetail(current.categoryId)) },
             onPickAppCategory = { route = StyleRoute.AppCategoryPicker(it, StyleRoute.CategoryDetail(current.categoryId)) },
+            onRefreshApps = { refreshApps(force = true) },
             onReload = ::reload
         )
         StyleRoute.AllApps -> AllAppsScreen(
             repository = repository,
             refreshKey = refreshKey,
+            refreshState = refreshState,
             onBack = { route = StyleRoute.Home; reload() },
             onPickAppCategory = { route = StyleRoute.AppCategoryPicker(it, StyleRoute.AllApps) },
+            onRefreshApps = { refreshApps(force = true) },
             onReload = ::reload
         )
         is StyleRoute.StyleLibrary -> StyleLibraryScreen(
@@ -1080,10 +1165,24 @@ private data class PendingAppChange(
     val targetCategoryId: String?
 )
 
+private data class StyleRefreshState(
+    val isRefreshing: Boolean,
+    val appCount: Int,
+    val lastUpdatedAtMillis: Long?,
+    val isStale: Boolean,
+    val message: String? = null
+) {
+    companion object {
+        fun from(state: com.example.voiceslip.data.InstalledAppCacheState): StyleRefreshState =
+            StyleRefreshState(false, state.appCount, state.lastUpdatedAtMillis, state.isStale)
+    }
+}
+
 @Composable
 private fun StyleHomeScreen(
     repository: VoiceSlipRepository,
     refreshKey: Int,
+    refreshState: StyleRefreshState,
     onRoute: (StyleRoute) -> Unit,
     onReload: () -> Unit
 ) {
@@ -1095,6 +1194,9 @@ private fun StyleHomeScreen(
         item {
             SectionTitle("Style")
             Text("Categories, app assignments, and reusable style prompts.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (refreshState.isRefreshing || refreshState.isStale) {
+                Text(appRefreshText(refreshState), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         item {
             Text("Categories", fontWeight = FontWeight.SemiBold)
@@ -1180,10 +1282,12 @@ private fun CategoryDetailScreen(
     repository: VoiceSlipRepository,
     categoryId: String,
     refreshKey: Int,
+    refreshState: StyleRefreshState,
     onBack: () -> Unit,
     onChooseStyle: () -> Unit,
     onEditStyle: (String) -> Unit,
     onPickAppCategory: (String) -> Unit,
+    onRefreshApps: () -> Unit,
     onReload: () -> Unit
 ) {
     val categories = remember(refreshKey) { repository.listCategories() }
@@ -1193,23 +1297,36 @@ private fun CategoryDetailScreen(
     var query by remember { mutableStateOf("") }
     val apps = remember(refreshKey, query) { repository.listInstalledApps(query) }
     var pending by remember { mutableStateOf<PendingAppChange?>(null) }
+    val listState = rememberLazyListState()
+    val scrollScope = rememberCoroutineScope()
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        ScreenHeader(category.name, onBack)
-        SettingsCard {
-            Text("Style", fontWeight = FontWeight.SemiBold)
-            Text(style.name, style = MaterialTheme.typography.titleMedium)
-            Text(style.effectivePrompt, maxLines = 3, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onChooseStyle) { Text("Change") }
-                OutlinedButton(onClick = { onEditStyle(style.id) }) { Text("Edit prompt") }
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(20.dp),
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item { ScreenHeader(category.name, onBack) }
+            item {
+                SettingsCard {
+                    Text("Style", fontWeight = FontWeight.SemiBold)
+                    Text(style.name, style = MaterialTheme.typography.titleMedium)
+                    Text(style.effectivePrompt, maxLines = 3, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onChooseStyle) { Text("Change") }
+                        OutlinedButton(onClick = { onEditStyle(style.id) }) { Text("Edit prompt") }
+                    }
+                }
             }
-        }
-        OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Search apps") }, singleLine = true)
-        val sorted = apps.sortedWith(compareByDescending<com.example.voiceslip.data.InstalledAppInfo> {
-            if (category.id == CATEGORY_OTHER) it.categoryId == null else it.categoryId == category.id
-        }.thenByDescending { it.lastSeenAtMillis ?: 0L }.thenBy { it.label.lowercase() })
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Search apps") }, singleLine = true)
+            }
+            item {
+                RefreshStatusRow(refreshState = refreshState, onRefreshApps = onRefreshApps)
+            }
+            val sorted = apps.sortedWith(compareByDescending<com.example.voiceslip.data.InstalledAppInfo> {
+                if (category.id == CATEGORY_OTHER) it.categoryId == null else it.categoryId == category.id
+            }.thenByDescending { it.lastSeenAtMillis ?: 0L }.thenBy { it.label.lowercase() })
             items(sorted, key = { it.packageName }) { app ->
                 val checked = if (category.id == CATEGORY_OTHER) app.categoryId == null else app.categoryId == category.id
                 AppAssignmentRow(
@@ -1230,6 +1347,16 @@ private fun CategoryDetailScreen(
                 )
             }
         }
+        if (listState.firstVisibleItemIndex > 2) {
+            Button(
+                onClick = {
+                    scrollScope.launch {
+                        listState.animateScrollToItem(0)
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)
+            ) { Text("Top") }
+        }
     }
     pending?.let { change ->
         ConfirmAppChangeDialog(change, categories, onDismiss = { pending = null }) {
@@ -1244,8 +1371,10 @@ private fun CategoryDetailScreen(
 private fun AllAppsScreen(
     repository: VoiceSlipRepository,
     refreshKey: Int,
+    refreshState: StyleRefreshState,
     onBack: () -> Unit,
     onPickAppCategory: (String) -> Unit,
+    onRefreshApps: () -> Unit,
     onReload: () -> Unit
 ) {
     val categories = remember(refreshKey) { repository.listCategories() }
@@ -1255,6 +1384,10 @@ private fun AllAppsScreen(
     BackHandler { onBack() }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ScreenHeader("All Apps", onBack)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onRefreshApps, enabled = !refreshState.isRefreshing) { Text("Refresh apps") }
+            Text(appRefreshText(refreshState), modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+        }
         OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Search apps") }, singleLine = true)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CategoryChip("All", selectedCategoryId == null) { selectedCategoryId = null }
@@ -1339,6 +1472,35 @@ private fun AppCategoryPickerScreen(
 @Composable
 private fun CategoryChip(label: String, selected: Boolean, onClick: () -> Unit) {
     if (selected) Button(onClick = onClick) { Text(label) } else OutlinedButton(onClick = onClick) { Text(label) }
+}
+
+@Composable
+private fun RefreshStatusRow(refreshState: StyleRefreshState, onRefreshApps: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            appRefreshText(refreshState),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        OutlinedButton(onClick = onRefreshApps, enabled = !refreshState.isRefreshing) {
+            Text(if (refreshState.isRefreshing) "Refreshing" else "Refresh")
+        }
+    }
+}
+
+private fun appRefreshText(state: StyleRefreshState): String {
+    state.message?.let { return "$it · ${state.appCount} apps" }
+    if (state.isRefreshing) return "Refreshing apps · ${state.appCount} cached"
+    if (state.lastUpdatedAtMillis == null) return "No cached apps yet"
+    val ageHours = ((System.currentTimeMillis() - state.lastUpdatedAtMillis) / (60L * 60L * 1000L)).coerceAtLeast(0L)
+    return if (state.isStale) {
+        "App cache stale · ${state.appCount} apps · ${ageHours}h old"
+    } else {
+        "App cache ready · ${state.appCount} apps · ${ageHours}h old"
+    }
 }
 
 @Composable
@@ -1733,7 +1895,7 @@ private fun HistoryScreen(
                         onRetry(item)
                         items = repository.listHistory()
                     },
-                    onCopy = { item.transcript?.let(onCopy) },
+                    onCopy = { item.displayText()?.let(onCopy) },
                     onDelete = { pendingDelete = item }
                 )
             }
@@ -1859,6 +2021,9 @@ private fun HistoryCard(
             item.error?.takeIf { it.isNotBlank() }?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
+            historyContextLine(item)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             Text(
                 "${item.pipelineSummary ?: item.model} · ${item.durationMillis / 1000}s · retries ${item.retryCount}",
                 style = MaterialTheme.typography.bodySmall,
@@ -1866,7 +2031,7 @@ private fun HistoryCard(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onRetry, enabled = item.status != RecordingStatus.TRANSCRIBING) { Text("Retry") }
-                OutlinedButton(onClick = onCopy, enabled = !item.transcript.isNullOrBlank()) { Text("Copy") }
+                OutlinedButton(onClick = onCopy, enabled = !item.displayText().isNullOrBlank()) { Text("Copy") }
                 TextButton(onClick = onDelete) { Text("Delete") }
             }
         }
@@ -1903,7 +2068,7 @@ private fun HistoryDetailDialog(
                 }
                 item.displayText()?.takeIf { it.isNotBlank() }?.let { finalText ->
                     item {
-                        Text("Final text", fontWeight = FontWeight.SemiBold)
+                        Text(if (item.errorStage == "output_guard") "Rejected output" else "Final text", fontWeight = FontWeight.SemiBold)
                         Text(finalText)
                         OutlinedButton(onClick = onCopyFinal) { Text("Copy final") }
                     }
@@ -1922,10 +2087,51 @@ private fun HistoryDetailDialog(
                         Text(error, color = MaterialTheme.colorScheme.error)
                     }
                 }
+                item {
+                    Text("Debug", fontWeight = FontWeight.SemiBold)
+                    DebugLine("Package", item.targetPackage)
+                    DebugLine("App", item.targetAppLabel)
+                    DebugLine("Category", item.resolvedCategoryName ?: item.resolvedCategoryId)
+                    DebugLine("Style", item.resolvedStyleName ?: item.resolvedStyleId)
+                    DebugLine("Pipeline", item.pipelineSummary)
+                    DebugLine("Provider/model", providerModelLine(item))
+                    DebugLine("Detected language", item.detectedLanguage)
+                    DebugLine("Insertion/error", item.error)
+                }
+                item.stylePromptSnapshot?.takeIf { it.isNotBlank() }?.let { prompt ->
+                    item {
+                        Text("Style prompt snapshot", fontWeight = FontWeight.SemiBold)
+                        Text(prompt)
+                    }
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
+}
+
+@Composable
+private fun DebugLine(label: String, value: String?) {
+    Text("$label: ${value?.takeIf { it.isNotBlank() } ?: ""}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+private fun historyContextLine(item: HistoryItem): String? {
+    val parts = listOfNotNull(
+        item.targetAppLabel?.takeIf { it.isNotBlank() },
+        item.resolvedCategoryName?.takeIf { it.isNotBlank() },
+        item.resolvedStyleName?.takeIf { it.isNotBlank() }
+    )
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}
+
+private fun providerModelLine(item: HistoryItem): String {
+    val details = listOfNotNull(
+        item.provider.takeIf { it.isNotBlank() }?.let { "$it/${item.model}" },
+        item.transcriptionProvider?.takeIf { it.isNotBlank() }?.let { "$it/${item.transcriptionModel.orEmpty()}" },
+        item.audioModelProvider?.takeIf { it.isNotBlank() }?.let { "$it/${item.audioModel.orEmpty()}" },
+        item.postProcessingProvider?.takeIf { it.isNotBlank() }?.let { "$it/${item.postProcessingModel.orEmpty()}" }
+    )
+    return details.distinct().joinToString(" · ")
 }
 
 @Composable
@@ -1985,3 +2191,26 @@ private fun isAccessibilityEnabled(context: Context): Boolean {
     ).orEmpty()
     return enabled.split(':').any { it.equals("${context.packageName}/com.example.voiceslip.service.VoiceSlipAccessibilityService", ignoreCase = true) }
 }
+
+private fun HistoryItem.withPipelineResult(
+    result: PipelineResult,
+    config: PipelineConfig,
+    retryCount: Int = this.retryCount
+): HistoryItem = copy(
+    rawTranscript = result.rawTranscript,
+    finalText = result.finalText,
+    detectedLanguage = result.detectedLanguage,
+    provider = result.provider,
+    model = result.model,
+    pipelineMode = config.mode.name,
+    transcriptionProvider = result.transcriptionProvider,
+    transcriptionModel = result.transcriptionModel,
+    audioModelProvider = result.audioModelProvider,
+    audioModel = result.audioModel,
+    postProcessingProvider = result.postProcessingProvider,
+    postProcessingModel = result.postProcessingModel,
+    stylePreset = result.stylePreset,
+    pipelineSummary = result.pipelineSummary,
+    metadataJson = result.metadataJson,
+    retryCount = retryCount
+)
