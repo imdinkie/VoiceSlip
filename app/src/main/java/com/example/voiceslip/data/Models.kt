@@ -98,8 +98,7 @@ data class PipelineConfig(
     val transcriptionEngine: TranscriptionEngineId = TranscriptionEngineId.MISTRAL_VOXTRAL_MINI_TRANSCRIBE,
     val audioDirectEngine: AudioDirectEngineId = AudioDirectEngineId.MISTRAL_VOXTRAL_SMALL_AUDIO,
     val postProcessingProvider: PostProcessingProvider = PostProcessingProvider.NONE,
-    val postProcessingModel: String = "",
-    val stylePreset: StylePreset = StylePreset.RAW
+    val postProcessingModel: String = ""
 ) {
     fun requiredProviders(): Set<ProviderId> = buildSet {
         when (mode) {
@@ -153,7 +152,17 @@ data class HistoryItem(
     val pipelineSummary: String? = null,
     val errorStage: String? = null,
     val metadataJson: String? = null,
-    val retryCount: Int = 0
+    val retryCount: Int = 0,
+    val targetPackage: String? = null,
+    val targetAppLabel: String? = null,
+    val resolvedCategoryId: String? = null,
+    val resolvedCategoryName: String? = null,
+    val resolvedStyleId: String? = null,
+    val resolvedStyleName: String? = null,
+    val stylePromptSnapshot: String? = null,
+    val dictionarySnapshot: String? = null,
+    val pipelineConfigSnapshot: String? = null,
+    val dictionaryRoutingSnapshot: String? = null
 ) {
     fun displayText(): String? = finalText ?: transcript ?: rawTranscript
 }
@@ -163,4 +172,56 @@ data class DictionaryEntry(
     val phrase: String,
     val createdAtMillis: Long,
     val updatedAtMillis: Long
+)
+
+data class VoiceStyle(
+    val id: String,
+    val name: String,
+    val basePresetId: String?,
+    val defaultPrompt: String,
+    val userPromptOverride: String?,
+    val isBuiltIn: Boolean
+) {
+    val effectivePrompt: String get() = userPromptOverride?.takeIf { it.isNotBlank() } ?: defaultPrompt
+}
+
+data class VoiceCategory(
+    val id: String,
+    val name: String,
+    val styleId: String,
+    val isPreset: Boolean
+)
+
+data class InstalledAppInfo(
+    val packageName: String,
+    val label: String,
+    val iconCacheKey: String,
+    val categoryId: String?,
+    val categoryName: String?,
+    val lastSeenAtMillis: Long?
+)
+
+data class StyleResolution(
+    val targetPackage: String?,
+    val targetAppLabel: String,
+    val categoryId: String,
+    val categoryName: String,
+    val styleId: String,
+    val styleName: String,
+    val stylePrompt: String
+)
+
+data class DictionaryPromptPlan(
+    val sent: Boolean,
+    val mechanism: String,
+    val prompt: String?,
+    val includedTerms: Int,
+    val totalTerms: Int,
+    val limit: Int? = null,
+    val truncated: Boolean = includedTerms < totalTerms
+)
+
+data class PipelinePreview(
+    val title: String,
+    val lines: List<String>
 )

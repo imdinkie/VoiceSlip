@@ -1,7 +1,6 @@
 package com.example.voiceslip.net
 
 import com.example.voiceslip.data.ModelOption
-import com.example.voiceslip.data.StylePreset
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedOutputStream
@@ -65,9 +64,10 @@ class GroqClient {
         rawTranscript: String,
         detectedLanguage: String?,
         dictionaryTerms: List<String>,
-        stylePreset: StylePreset
+        stylePrompt: String,
+        cleanupPolicy: String
     ): PostProcessingResult {
-        val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePreset)
+        val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePrompt, cleanupPolicy)
         val json = JSONObject(postJson("https://api.groq.com/openai/v1/chat/completions", apiKey, request))
         return parsePostProcessing(json, model)
     }
@@ -111,19 +111,20 @@ internal fun postProcessingRequest(
     rawTranscript: String,
     detectedLanguage: String?,
     dictionaryTerms: List<String>,
-    stylePreset: StylePreset
+    stylePrompt: String,
+    cleanupPolicy: String
 ): JSONObject {
     val system = buildString {
-        append("You clean dictated transcripts for insertion into the user's current text field. ")
-        append("Preserve meaning. Do not answer questions. Do not add facts. ")
-        append("Preserve names, numbers, dates, URLs, email addresses, code-like tokens, and language. ")
+        append("Clean this raw transcript and return the final insertable text. ")
+        append(cleanupPolicy)
+        append(" ")
         if (detectedLanguage != null) append("Detected language: $detectedLanguage. ")
         if (dictionaryTerms.isNotEmpty()) {
             append("Dictionary spelling constraints: ${dictionaryTerms.take(100).joinToString(", ")}. ")
         }
         append("Return only JSON with key final_text.")
     }
-    val user = "${styleInstruction(stylePreset)}\n\nTranscript:\n$rawTranscript"
+    val user = "Style instruction:\n$stylePrompt\n\nTranscript:\n$rawTranscript"
     return JSONObject()
         .put("model", model)
         .put("temperature", 0.1)

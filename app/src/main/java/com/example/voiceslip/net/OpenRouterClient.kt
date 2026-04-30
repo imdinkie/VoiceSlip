@@ -1,7 +1,6 @@
 package com.example.voiceslip.net
 
 import com.example.voiceslip.data.ModelOption
-import com.example.voiceslip.data.StylePreset
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -14,9 +13,10 @@ class OpenRouterClient {
         rawTranscript: String,
         detectedLanguage: String?,
         dictionaryTerms: List<String>,
-        stylePreset: StylePreset
+        stylePrompt: String,
+        cleanupPolicy: String
     ): PostProcessingResult {
-        val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePreset)
+        val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePrompt, cleanupPolicy)
         val json = JSONObject(postJson("https://openrouter.ai/api/v1/chat/completions", apiKey, request))
         return parsePostProcessing(json, model)
     }

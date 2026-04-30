@@ -37,9 +37,11 @@ import android.widget.TextView
 import android.widget.Toast
 import com.example.voiceslip.audio.VoiceRecorder
 import com.example.voiceslip.data.HistoryItem
+import com.example.voiceslip.data.PipelineConfig
 import com.example.voiceslip.data.PipelineMode
 import com.example.voiceslip.data.RecordingStatus
 import com.example.voiceslip.data.SecretStore
+import com.example.voiceslip.data.StyleResolution
 import com.example.voiceslip.data.VoiceSlipRepository
 import com.example.voiceslip.net.PipelineException
 import com.example.voiceslip.net.PipelineExecutor
@@ -59,6 +61,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     private var overlay: RecordingOverlay? = null
     private var overlayParams: WindowManager.LayoutParams? = null
     private var currentItem: HistoryItem? = null
+    private var currentConfigSnapshot: PipelineConfig? = null
+    private var currentStyleSnapshot: StyleResolution? = null
     private var recordingStartedAt = 0L
     private var overlayExpanded = false
     private var compactAnchorX = -1
@@ -103,6 +107,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             }
             return
         }
+        repository.noteRecentApp(event?.packageName?.toString())
         refreshOverlayVisibility()
     }
 
@@ -341,6 +346,9 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             return
         }
         val config = repository.getPipelineConfig()
+        val activePackage = activeApplicationPackage()
+        val styleResolution = repository.resolveStyleForPackage(activePackage)
+        val dictionary = repository.listDictionary().map { it.phrase }
         val validation = runCatching {
             PipelineExecutor { secretStore.getApiKey(it) }.validate(config)
         }.exceptionOrNull()
@@ -354,6 +362,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             recorder.start(file)
             haptic()
             recordingStartedAt = System.currentTimeMillis()
+            currentConfigSnapshot = config
+            currentStyleSnapshot = styleResolution
             currentItem = HistoryItem(
                 id = id,
                 createdAtMillis = recordingStartedAt,
@@ -361,8 +371,18 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 durationMillis = 0L,
                 status = RecordingStatus.RECORDING,
                 pipelineMode = config.mode.name,
-                stylePreset = config.stylePreset.name,
-                pipelineSummary = pipelineSummary(config)
+                stylePreset = styleResolution.styleName,
+                pipelineSummary = pipelineSummary(config),
+                targetPackage = styleResolution.targetPackage,
+                targetAppLabel = styleResolution.targetAppLabel,
+                resolvedCategoryId = styleResolution.categoryId,
+                resolvedCategoryName = styleResolution.categoryName,
+                resolvedStyleId = styleResolution.styleId,
+                resolvedStyleName = styleResolution.styleName,
+                stylePromptSnapshot = styleResolution.stylePrompt,
+                dictionarySnapshot = org.json.JSONArray(dictionary).toString(),
+                pipelineConfigSnapshot = repository.pipelineConfigSnapshot(config),
+                dictionaryRoutingSnapshot = repository.dictionaryRoutingSnapshot(config, dictionary)
             ).also { repository.upsertHistory(it) }
             showOverlay(expanded = true)
             overlay?.setRecordingState(RecordingUiState.RECORDING)
@@ -394,6 +414,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             repository.upsertHistory(it.copy(status = RecordingStatus.CANCELED, durationMillis = System.currentTimeMillis() - it.createdAtMillis))
         }
         currentItem = null
+        currentConfigSnapshot = null
+        currentStyleSnapshot = null
         refreshOverlayVisibility()
     }
 
@@ -417,9 +439,25 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         overlay?.setRecordingState(RecordingUiState.TRANSCRIBING)
         Thread {
             val updated = runCatching {
-                val config = repository.getPipelineConfig()
+                val config = currentConfigSnapshot ?: repository.getPipelineConfig()
+                val style = currentStyleSnapshot ?: repository.resolveStyleForPackage(item.targetPackage)
                 val dictionary = repository.listDictionary().map { it.phrase }
-                val pipeline = PipelineExecutor { secretStore.getApiKey(it) }.execute(config, result.file, dictionary)
+                val transcriptionDictionary = if (config.mode == PipelineMode.AUDIO_DIRECT) {
+                    dictionary
+                } else {
+                    val plan = repository.dictionaryPlanForTranscription(config.transcriptionEngine, dictionary)
+                    dictionary.take(plan.includedTerms)
+                }
+                val pipeline = PipelineExecutor { secretStore.getApiKey(it) }.execute(
+                    config,
+                    result.file,
+                    dictionary,
+                    transcriptionDictionaryTerms = transcriptionDictionary,
+                    styleId = style.styleId,
+                    styleName = style.styleName,
+                    stylePrompt = style.stylePrompt,
+                    cleanupPolicy = repository.getCleanupPolicy()
+                )
                 val text = pipeline.finalText
                 val insertionResult = mainHandler.postAndWait { insertOrCopy(text) }
                 item.copy(
@@ -441,7 +479,17 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     stylePreset = pipeline.stylePreset,
                     pipelineSummary = pipeline.pipelineSummary,
                     errorStage = insertionResult.errorStage,
-                    metadataJson = pipeline.metadataJson
+                    metadataJson = pipeline.metadataJson,
+                    targetPackage = style.targetPackage,
+                    targetAppLabel = style.targetAppLabel,
+                    resolvedCategoryId = style.categoryId,
+                    resolvedCategoryName = style.categoryName,
+                    resolvedStyleId = style.styleId,
+                    resolvedStyleName = style.styleName,
+                    stylePromptSnapshot = style.stylePrompt,
+                    dictionarySnapshot = org.json.JSONArray(dictionary).toString(),
+                    pipelineConfigSnapshot = repository.pipelineConfigSnapshot(config),
+                    dictionaryRoutingSnapshot = repository.dictionaryRoutingSnapshot(config, dictionary)
                 )
             }.getOrElse { error ->
                 item.copy(
@@ -453,6 +501,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             repository.upsertHistory(updated)
             mainHandler.post {
                 currentItem = null
+                currentConfigSnapshot = null
+                currentStyleSnapshot = null
                 if (updated.status == RecordingStatus.SUCCEEDED) {
                     insertionToast(updated.errorStage)?.let { toast(it) }
                 } else {

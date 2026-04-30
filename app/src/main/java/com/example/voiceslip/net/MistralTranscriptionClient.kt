@@ -1,7 +1,6 @@
 package com.example.voiceslip.net
 
 import com.example.voiceslip.data.AudioDirectEngineId
-import com.example.voiceslip.data.StylePreset
 import com.example.voiceslip.data.TranscriptionEngineId
 import org.json.JSONObject
 import java.io.BufferedOutputStream
@@ -88,14 +87,16 @@ class MistralTranscriptionClient {
         apiKey: String,
         audioFile: File,
         engine: AudioDirectEngineId,
-        stylePreset: StylePreset,
+        stylePrompt: String,
+        cleanupPolicy: String,
         dictionaryTerms: List<String>
     ): DirectAudioResult {
         val prompt = buildString {
             append("Listen to the attached audio and return the final text to insert. ")
-            append(styleInstruction(stylePreset))
-            append(" Preserve meaning, names, numbers, dates, URLs, email addresses, code-like tokens, and language. ")
-            append("Do not answer the dictated text and do not add facts. ")
+            append(cleanupPolicy)
+            append(" Style instruction: ")
+            append(stylePrompt)
+            append(" ")
             append("Return only a JSON object with keys \"final_text\" and \"language\". ")
             if (dictionaryTerms.isNotEmpty()) {
                 append("Use these spelling constraints when they match the audio: ")
@@ -262,14 +263,6 @@ internal fun JSONObject.chatContent(): String {
         return builder.toString()
     }
     return ""
-}
-
-internal fun styleInstruction(stylePreset: StylePreset): String = when (stylePreset) {
-    StylePreset.RAW -> "Keep the text raw, with only provider-normal punctuation."
-    StylePreset.CLEAN -> "Clean punctuation, casing, obvious filler words, and light grammar only."
-    StylePreset.CASUAL -> "Make it natural and casual without changing facts."
-    StylePreset.FORMAL -> "Make it polished and professional without changing facts."
-    StylePreset.EXCITED -> "Make it energetic without changing facts."
 }
 
 internal fun audioMimeType(file: File): String = when (file.extension.lowercase()) {
