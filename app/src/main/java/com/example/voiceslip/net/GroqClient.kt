@@ -119,8 +119,8 @@ internal fun postProcessingRequest(
     val system = buildString {
         appendLine("Clean this raw transcript and return the final insertable text.")
         appendLine()
-        if (preserveSpokenLanguage) {
-            appendLine(postProcessingLanguageInstruction(detectedLanguage))
+        buildPostProcessingLanguageBlock(detectedLanguage, preserveSpokenLanguage)?.let {
+            appendLine(it)
             appendLine()
         }
         appendLine("Follow these global cleanup rules:")
@@ -143,13 +143,6 @@ internal fun postProcessingRequest(
         )
         .put("response_format", JSONObject().put("type", "json_object"))
 }
-
-private fun postProcessingLanguageInstruction(detectedLanguage: String?): String =
-    if (detectedLanguage.isNullOrBlank()) {
-        "Do not translate; keep the output in the same language as the transcript."
-    } else {
-        "Do not translate; keep the output in the detected/spoken language. Detected language: $detectedLanguage."
-    }
 
 internal fun parsePostProcessing(json: JSONObject, fallbackModel: String): PostProcessingResult {
     val content = json.chatContent()

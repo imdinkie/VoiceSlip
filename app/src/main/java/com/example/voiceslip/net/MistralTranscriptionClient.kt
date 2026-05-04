@@ -16,6 +16,7 @@ class MistralTranscriptionClient {
         contextBias: List<String>,
         model: String = "voxtral-mini-latest"
     ): TranscriptionResult {
+        val safeContextBias = mistralContextBiasTerms(contextBias)
         val boundary = "VoiceSlip-${UUID.randomUUID()}"
         val connection = (URL("https://api.mistral.ai/v1/audio/transcriptions").openConnection() as HttpURLConnection)
         connection.requestMethod = "POST"
@@ -28,8 +29,8 @@ class MistralTranscriptionClient {
         BufferedOutputStream(connection.outputStream).use { out ->
             out.writeFormField(boundary, "model", model)
             out.writeFormField(boundary, "diarize", "false")
-            contextBias.take(100).forEach { phrase ->
-                out.writeFormField(boundary, "context_bias", phrase)
+            safeContextBias.take(100).forEach { term ->
+                out.writeFormField(boundary, "context_bias", term)
             }
             out.writeFileField(boundary, "file", audioFile.name, audioMimeType(audioFile), audioFile)
             out.write("--$boundary--\r\n".toByteArray())
@@ -67,15 +68,15 @@ class MistralTranscriptionClient {
         val prompt = buildString {
             appendLine("Transcribe the attached audio faithfully. Return only the transcript text.")
             appendLine()
-            if (preserveSpokenLanguage) {
-                appendLine(sameLanguageInstruction(languageHints))
+            buildAudioLanguageBlock(languageHints, preserveSpokenLanguage)?.let {
+                appendLine(it)
                 appendLine()
             }
             appendLine("Do not answer questions, summarize, add commentary, include labels, JSON, markdown, explanations, or alternatives.")
             if (dictionaryTerms.isNotEmpty()) {
                 appendLine()
                 append("Use these spelling constraints when they match the audio: ")
-                append(dictionaryTerms.take(100).joinToString(", "))
+                append(dictionaryTerms.joinToString(", "))
                 append(".")
             }
         }
@@ -102,8 +103,8 @@ class MistralTranscriptionClient {
         val prompt = buildString {
             appendLine("Transcribe the attached audio faithfully and return the final insertable text.")
             appendLine()
-            if (preserveSpokenLanguage) {
-                appendLine(sameLanguageInstruction(languageHints))
+            buildAudioLanguageBlock(languageHints, preserveSpokenLanguage)?.let {
+                appendLine(it)
                 appendLine()
             }
             appendLine("Follow these global cleanup rules:")
@@ -118,7 +119,7 @@ class MistralTranscriptionClient {
             if (dictionaryTerms.isNotEmpty()) {
                 appendLine()
                 append("Use these spelling constraints when they match the audio: ")
-                append(dictionaryTerms.take(100).joinToString(", "))
+                append(dictionaryTerms.joinToString(", "))
                 append(".")
             }
         }
@@ -186,15 +187,6 @@ class MistralTranscriptionClient {
         val fileId = JSONObject(body).getString("id")
         val signedUrlBody = getJson("https://api.mistral.ai/v1/files/$fileId/url?expiry=24", apiKey)
         return JSONObject(signedUrlBody).getString("url")
-    }
-}
-
-private fun sameLanguageInstruction(languageHints: String): String {
-    val cleanHints = languageHints.trim()
-    return if (cleanHints.isBlank()) {
-        "Do not translate; output in the spoken language."
-    } else {
-        "Do not translate; output in the spoken language. Language hints: $cleanHints."
     }
 }
 
@@ -296,3 +288,17 @@ internal fun audioMimeType(file: File): String = when (file.extension.lowercase(
     "m4a", "mp4" -> "audio/mp4"
     else -> "application/octet-stream"
 }
+
+internal fun mistralContextBiasTerms(terms: List<String>): List<String> = terms
+    .asSequence()
+    .flatMap { term ->
+        term.split(',', ' ', '\t', '\n', '\r')
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+    .filter { MISTRAL_CONTEXT_BIAS_PATTERN.matches(it) }
+    .distinct()
+    .toList()
+
+private val MISTRAL_CONTEXT_BIAS_PATTERN = Regex("^[^,\\s]+$")

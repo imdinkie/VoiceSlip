@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import com.example.voiceslip.net.mistralContextBiasTerms
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -22,6 +23,7 @@ class VoiceSlipRepository(context: Context) {
     private val appIconDir: File = File(appContext.filesDir, "app_icons").apply { mkdirs() }
 
     init {
+        seedOpenRouterAudioFavorites()
         seedDefaults()
     }
 
@@ -82,6 +84,33 @@ class VoiceSlipRepository(context: Context) {
         val array = JSONArray()
         models.forEach { array.put(it.toJson()) }
         prefs.edit().putString("${provider.name.lowercase()}_models", array.toString()).apply()
+    }
+
+    fun getCachedOpenRouterAudioModels(): List<ModelOption> = getCachedModelList(KEY_OPENROUTER_AUDIO_MODELS)
+
+    fun setCachedOpenRouterAudioModels(models: List<ModelOption>) {
+        setCachedModelList(KEY_OPENROUTER_AUDIO_MODELS, models)
+    }
+
+    fun getOpenRouterAudioFavoriteIds(): List<String> = getStringList(KEY_OPENROUTER_AUDIO_FAVORITES)
+
+    fun toggleOpenRouterAudioFavorite(modelId: String) {
+        toggleStringListValue(KEY_OPENROUTER_AUDIO_FAVORITES, modelId)
+    }
+
+    fun getPostProcessingFavoriteIds(provider: PostProcessingProvider): List<String> = when (provider) {
+        PostProcessingProvider.GROQ -> getStringList(KEY_GROQ_POST_PROCESSING_FAVORITES)
+        PostProcessingProvider.OPENROUTER -> getStringList(KEY_OPENROUTER_POST_PROCESSING_FAVORITES)
+        PostProcessingProvider.NONE -> emptyList()
+    }
+
+    fun togglePostProcessingFavorite(provider: PostProcessingProvider, modelId: String) {
+        val key = when (provider) {
+            PostProcessingProvider.GROQ -> KEY_GROQ_POST_PROCESSING_FAVORITES
+            PostProcessingProvider.OPENROUTER -> KEY_OPENROUTER_POST_PROCESSING_FAVORITES
+            PostProcessingProvider.NONE -> return
+        }
+        toggleStringListValue(key, modelId)
     }
 
     fun listDictionary(): List<DictionaryEntry> = dao.listDictionary().map { it.toDictionaryEntry() }
@@ -284,16 +313,34 @@ class VoiceSlipRepository(context: Context) {
         return when {
             engine.provider == ProviderId.GROQ -> groqDictionaryPrompt(terms)
             engine.provider == ProviderId.MISTRAL && engine.audioChat ->
-                DictionaryPromptPlan(true, "Prompt spelling constraints", "Use these spelling constraints when they match the audio: ${terms.joinToString(", ")}.", terms.size, terms.size)
-            else ->
-                DictionaryPromptPlan(true, "Mistral context_bias", terms.take(100).joinToString("\n"), terms.take(100).size, terms.size, 100)
+                DictionaryPromptPlan(true, "Prompt spelling constraints", "Use these spelling constraints when they match the audio: ${terms.take(100).joinToString(", ")}.", terms.take(100).size, terms.size, 100)
+            else -> {
+                val safeTerms = mistralContextBiasTerms(terms)
+                DictionaryPromptPlan(true, "Mistral context_bias", safeTerms.take(100).joinToString("\n"), safeTerms.take(100).size, terms.size, 100)
+            }
         }
+    }
+
+    fun dictionaryPlanForTranscription(config: PipelineConfig, terms: List<String>): DictionaryPromptPlan {
+        if (config.transcriptionEngineKind == EngineKind.BUILT_IN) {
+            return dictionaryPlanForTranscription(config.transcriptionEngine, terms)
+        }
+        val enabled = routingForEngine(OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID).sendDictionaryToTranscription
+        if (!enabled || terms.isEmpty()) return DictionaryPromptPlan(false, "Off", null, 0, terms.size)
+        return DictionaryPromptPlan(
+            true,
+            "OpenRouter audio prompt spelling constraints",
+            "Use these spelling constraints when they match the audio: ${terms.take(100).joinToString(", ")}.",
+            terms.take(100).size,
+            terms.size,
+            100
+        )
     }
 
     fun dictionaryRoutingSnapshot(config: PipelineConfig, terms: List<String>): String {
         val plan = when (config.mode) {
             PipelineMode.AUDIO_DIRECT -> DictionaryPromptPlan(true, "Audio prompt spelling constraints", null, terms.size, terms.size)
-            else -> dictionaryPlanForTranscription(config.transcriptionEngine, terms)
+            else -> dictionaryPlanForTranscription(config, terms)
         }
         return JSONObject()
             .put("transcriptionMechanism", plan.mechanism)
@@ -305,9 +352,15 @@ class VoiceSlipRepository(context: Context) {
 
     fun pipelineConfigSnapshot(config: PipelineConfig): String = JSONObject()
         .put("mode", config.mode.name)
+        .put("transcriptionEngineKind", config.transcriptionEngineKind.name)
         .put("transcriptionEngine", config.transcriptionEngine.name)
+        .put("openRouterAudioTranscriptionModel", config.openRouterAudioTranscriptionModel)
+        .put("audioDirectEngineKind", config.audioDirectEngineKind.name)
         .put("audioDirectEngine", config.audioDirectEngine.name)
         .put("postProcessingProvider", config.postProcessingProvider.name)
+        .put("groqPostProcessingModel", config.groqPostProcessingModel)
+        .put("openRouterPostProcessingModel", config.openRouterPostProcessingModel)
+        .put("openRouterAudioDirectModel", config.openRouterAudioDirectModel)
         .put("postProcessingModel", config.postProcessingModel)
         .put("preserveSpokenLanguage", getPreserveSpokenLanguage())
         .put("languageHints", getLanguageHints())
@@ -335,6 +388,9 @@ class VoiceSlipRepository(context: Context) {
         }
         if (dao.getPipelineConfig() == null) dao.upsertPipelineConfig(PipelineConfig().toEntity())
         TranscriptionEngineId.entries.forEach { if (dao.getRouting(it.name) == null) dao.upsertRouting(EngineDictionaryRoutingEntity(it.name, true)) }
+        if (dao.getRouting(OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID) == null) {
+            dao.upsertRouting(EngineDictionaryRoutingEntity(OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID, true))
+        }
         val currentPromptSetting = dao.getPromptSetting(PROMPT_CLEANUP_POLICY)
         if (currentPromptSetting == null) {
             dao.upsertPromptSetting(defaultPromptSetting())
@@ -342,6 +398,13 @@ class VoiceSlipRepository(context: Context) {
             dao.upsertPromptSetting(currentPromptSetting.copy(defaultPrompt = defaultPromptSetting().defaultPrompt))
         }
         migrateStyleDefaults()
+    }
+
+    private fun seedOpenRouterAudioFavorites() {
+        if (prefs.getInt(KEY_OPENROUTER_AUDIO_DEFAULTS_SEEDED_VERSION, 0) >= OPENROUTER_AUDIO_DEFAULTS_VERSION) return
+        val existing = getOpenRouterAudioFavoriteIds()
+        setStringList(KEY_OPENROUTER_AUDIO_FAVORITES, (existing + DEFAULT_OPENROUTER_AUDIO_FAVORITES).distinct())
+        prefs.edit().putInt(KEY_OPENROUTER_AUDIO_DEFAULTS_SEEDED_VERSION, OPENROUTER_AUDIO_DEFAULTS_VERSION).apply()
     }
 
     private fun migrateStyleDefaults() {
@@ -403,6 +466,39 @@ class VoiceSlipRepository(context: Context) {
             file.absolutePath
         }.getOrNull()
     }
+
+    private fun getCachedModelList(key: String): List<ModelOption> {
+        val array = JSONArray(prefs.getString(key, "[]"))
+        return (0 until array.length()).mapNotNull { index ->
+            runCatching { array.getJSONObject(index).toModelOption() }.getOrNull()
+        }.sortedBy { it.name.lowercase() }
+    }
+
+    private fun setCachedModelList(key: String, models: List<ModelOption>) {
+        val array = JSONArray()
+        models.forEach { array.put(it.toJson()) }
+        prefs.edit().putString(key, array.toString()).apply()
+    }
+
+    private fun getStringList(key: String): List<String> {
+        val array = JSONArray(prefs.getString(key, "[]"))
+        return (0 until array.length()).mapNotNull { index ->
+            array.optString(index).trim().takeIf { it.isNotBlank() }
+        }.distinct()
+    }
+
+    private fun setStringList(key: String, values: List<String>) {
+        val array = JSONArray()
+        values.map { it.trim() }.filter { it.isNotBlank() }.distinct().forEach { array.put(it) }
+        prefs.edit().putString(key, array.toString()).apply()
+    }
+
+    private fun toggleStringListValue(key: String, value: String) {
+        val clean = value.trim()
+        if (clean.isBlank()) return
+        val current = getStringList(key)
+        setStringList(key, if (clean in current) current - clean else current + clean)
+    }
 }
 
 data class InstalledAppCacheState(
@@ -415,6 +511,13 @@ data class InstalledAppCacheState(
 private const val APP_CACHE_STALE_MS = 24L * 60L * 60L * 1000L
 private const val KEY_STYLE_DEFAULTS_VERSION = "style_defaults_version"
 private const val STYLE_DEFAULTS_VERSION = 2
+private const val KEY_OPENROUTER_AUDIO_MODELS = "openrouter_audio_models"
+private const val KEY_OPENROUTER_AUDIO_FAVORITES = "openrouter_audio_favorite_model_ids"
+private const val KEY_OPENROUTER_AUDIO_DEFAULTS_SEEDED_VERSION = "openrouter_audio_defaults_seeded_version"
+private const val OPENROUTER_AUDIO_DEFAULTS_VERSION = 1
+private const val KEY_GROQ_POST_PROCESSING_FAVORITES = "groq_post_processing_favorite_model_ids"
+private const val KEY_OPENROUTER_POST_PROCESSING_FAVORITES = "openrouter_post_processing_favorite_model_ids"
+const val OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID = "OPENROUTER_AUDIO_TRANSCRIPTION"
 
 private fun Drawable.toBitmap(width: Int, height: Int): Bitmap {
     if (this is BitmapDrawable && bitmap != null) return Bitmap.createScaledBitmap(bitmap, width, height, true)
@@ -534,19 +637,33 @@ Output: The prototype finally worked after the last change! This is exactly what
 
 private fun PipelineConfig.toEntity(): PipelineConfigEntity = PipelineConfigEntity(
     mode = mode.name,
+    transcriptionEngineKind = transcriptionEngineKind.name,
     transcriptionEngine = transcriptionEngine.name,
+    openRouterAudioTranscriptionModel = openRouterAudioTranscriptionModel,
+    audioDirectEngineKind = audioDirectEngineKind.name,
     audioDirectEngine = audioDirectEngine.name,
     postProcessingProvider = postProcessingProvider.name,
-    postProcessingModel = postProcessingModel
+    postProcessingModel = postProcessingModel,
+    groqPostProcessingModel = groqPostProcessingModel,
+    openRouterPostProcessingModel = openRouterPostProcessingModel,
+    openRouterAudioDirectModel = openRouterAudioDirectModel
 )
 
-private fun PipelineConfigEntity.toPipelineConfig(): PipelineConfig = PipelineConfig(
-    mode = enumValue(mode, PipelineMode.PURE_TRANSCRIPTION),
-    transcriptionEngine = enumValue(transcriptionEngine, TranscriptionEngineId.MISTRAL_VOXTRAL_MINI_TRANSCRIBE),
-    audioDirectEngine = enumValue(audioDirectEngine, AudioDirectEngineId.MISTRAL_VOXTRAL_SMALL_AUDIO),
-    postProcessingProvider = enumValue(postProcessingProvider, PostProcessingProvider.NONE),
-    postProcessingModel = postProcessingModel
-)
+private fun PipelineConfigEntity.toPipelineConfig(): PipelineConfig {
+    val provider = enumValue(postProcessingProvider, PostProcessingProvider.NONE)
+    return PipelineConfig(
+        mode = enumValue(mode, PipelineMode.PURE_TRANSCRIPTION),
+        transcriptionEngineKind = enumValue(transcriptionEngineKind, EngineKind.BUILT_IN),
+        transcriptionEngine = enumValue(transcriptionEngine, TranscriptionEngineId.MISTRAL_VOXTRAL_MINI_TRANSCRIBE),
+        openRouterAudioTranscriptionModel = openRouterAudioTranscriptionModel,
+        audioDirectEngineKind = enumValue(audioDirectEngineKind, EngineKind.BUILT_IN),
+        audioDirectEngine = enumValue(audioDirectEngine, AudioDirectEngineId.MISTRAL_VOXTRAL_SMALL_AUDIO),
+        postProcessingProvider = provider,
+        groqPostProcessingModel = groqPostProcessingModel.ifBlank { if (provider == PostProcessingProvider.GROQ) postProcessingModel else "" },
+        openRouterPostProcessingModel = openRouterPostProcessingModel.ifBlank { if (provider == PostProcessingProvider.OPENROUTER) postProcessingModel else "" },
+        openRouterAudioDirectModel = openRouterAudioDirectModel
+    )
+}
 
 private fun DictionaryEntryEntity.toDictionaryEntry(): DictionaryEntry = DictionaryEntry(id, phrase, createdAtMillis, updatedAtMillis)
 

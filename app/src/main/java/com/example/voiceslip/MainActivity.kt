@@ -49,6 +49,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -66,6 +67,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -105,7 +108,9 @@ import com.example.voiceslip.data.SecretStore
 import com.example.voiceslip.data.TranscriptionEngineId
 import com.example.voiceslip.data.AudioDirectEngineId
 import com.example.voiceslip.data.CATEGORY_OTHER
+import com.example.voiceslip.data.EngineKind
 import com.example.voiceslip.data.EngineDictionaryRoutingEntity
+import com.example.voiceslip.data.OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID
 import com.example.voiceslip.data.STYLE_CASUAL
 import com.example.voiceslip.data.VoiceCategory
 import com.example.voiceslip.data.VoiceSlipRepository
@@ -115,6 +120,11 @@ import com.example.voiceslip.net.OpenRouterClient
 import com.example.voiceslip.net.PipelineException
 import com.example.voiceslip.net.PipelineExecutor
 import com.example.voiceslip.net.PipelineResult
+import com.example.voiceslip.net.buildAudioLanguageBlock
+import com.example.voiceslip.net.buildAudioDirectPrompt
+import com.example.voiceslip.net.buildAudioTranscriptionPromptPreview
+import com.example.voiceslip.net.buildLanguageHintExamples
+import com.example.voiceslip.net.buildPostProcessingLanguageBlock
 import com.example.voiceslip.net.outputGuardRejection
 import com.example.voiceslip.service.VoiceSlipAccessibilityService
 import com.example.voiceslip.ui.theme.VoiceSlipTheme
@@ -164,10 +174,18 @@ class MainActivity : ComponentActivity() {
         repository.upsertHistory(item.copy(status = RecordingStatus.TRANSCRIBING, error = null))
         Thread {
             val updated = runCatching {
+                val dictionary = repository.listDictionary().map { it.phrase }
+                val transcriptionDictionary = if (config.mode == PipelineMode.AUDIO_DIRECT) {
+                    dictionary
+                } else {
+                    val plan = repository.dictionaryPlanForTranscription(config, dictionary)
+                    dictionary.take(plan.includedTerms)
+                }
                 val result = PipelineExecutor { secretStore.getApiKey(it) }.execute(
                     config = config,
                     audioFile = File(item.audioPath),
-                    dictionaryTerms = repository.listDictionary().map { it.phrase },
+                    dictionaryTerms = dictionary,
+                    transcriptionDictionaryTerms = transcriptionDictionary,
                     styleId = item.resolvedStyleId ?: STYLE_CASUAL,
                     styleName = item.resolvedStyleName ?: "Casual",
                     stylePrompt = item.stylePromptSnapshot ?: repository.getStyle(STYLE_CASUAL).effectivePrompt,
@@ -244,6 +262,7 @@ private fun VoiceSlipApp(
     var preserveSpokenLanguage by remember { mutableStateOf(repository.getPreserveSpokenLanguage()) }
     var groqModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.GROQ)) }
     var openRouterModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.OPENROUTER)) }
+    var openRouterAudioModels by remember { mutableStateOf(repository.getCachedOpenRouterAudioModels()) }
     var modelStatus by remember { mutableStateOf<String?>(null) }
     var appEnabled by remember { mutableStateOf(repository.getAppEnabled()) }
     var haptics by remember { mutableStateOf(repository.getHapticsEnabled()) }
@@ -265,6 +284,7 @@ private fun VoiceSlipApp(
         preserveSpokenLanguage = repository.getPreserveSpokenLanguage()
         groqModels = repository.getCachedModels(ProviderId.GROQ)
         openRouterModels = repository.getCachedModels(ProviderId.OPENROUTER)
+        openRouterAudioModels = repository.getCachedOpenRouterAudioModels()
         appEnabled = repository.getAppEnabled()
         haptics = repository.getHapticsEnabled()
         bubbleSizeDp = repository.getBubbleSizeDp()
@@ -382,6 +402,7 @@ private fun VoiceSlipApp(
                     preserveSpokenLanguage = preserveSpokenLanguage,
                     groqModels = groqModels,
                     openRouterModels = openRouterModels,
+                    openRouterAudioModels = openRouterAudioModels,
                     modelStatus = modelStatus,
                     hasGroqKey = groqKey.isNotBlank(),
                     hasOpenRouterKey = openRouterKey.isNotBlank(),
@@ -424,6 +445,21 @@ private fun VoiceSlipApp(
                             )
                             (context as? ComponentActivity)?.runOnUiThread {
                                 result.getOrNull()?.let { openRouterModels = it }
+                                modelStatus = message
+                            }
+                        }.start()
+                    },
+                    onRefreshOpenRouterAudio = {
+                        modelStatus = "Refreshing OpenRouter audio models..."
+                        Thread {
+                            val result = runCatching { OpenRouterClient().listAudioModels(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
+                            result.onSuccess { repository.setCachedOpenRouterAudioModels(it) }
+                            val message = result.fold(
+                                onSuccess = { "OpenRouter audio models refreshed (${it.size})" },
+                                onFailure = { "OpenRouter audio refresh failed: ${it.message}" }
+                            )
+                            (context as? ComponentActivity)?.runOnUiThread {
+                                result.getOrNull()?.let { openRouterAudioModels = it }
                                 modelStatus = message
                             }
                         }.start()
@@ -643,6 +679,7 @@ private fun ModelsScreen(
     preserveSpokenLanguage: Boolean,
     groqModels: List<ModelOption>,
     openRouterModels: List<ModelOption>,
+    openRouterAudioModels: List<ModelOption>,
     modelStatus: String?,
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
@@ -650,13 +687,91 @@ private fun ModelsScreen(
     onLanguageHintsChange: (String) -> Unit,
     onPreserveSpokenLanguageChange: (Boolean) -> Unit,
     onRefreshGroq: () -> Unit,
-    onRefreshOpenRouter: () -> Unit
+    onRefreshOpenRouter: () -> Unit,
+    onRefreshOpenRouterAudio: () -> Unit
 ) {
+    var route by remember { mutableStateOf<ModelsRoute>(ModelsRoute.Main) }
+    var favoritesVersion by remember { mutableIntStateOf(0) }
     var showPreview by remember { mutableStateOf(false) }
-    val postModels = when (config.postProcessingProvider) {
-        PostProcessingProvider.GROQ -> groqModels
-        PostProcessingProvider.OPENROUTER -> openRouterModels
-        PostProcessingProvider.NONE -> emptyList()
+    val audioFavoriteIds = remember(openRouterAudioModels, favoritesVersion) { repository.getOpenRouterAudioFavoriteIds() }
+    val groqPostFavoriteIds = remember(groqModels, favoritesVersion) { repository.getPostProcessingFavoriteIds(PostProcessingProvider.GROQ) }
+    val openRouterPostFavoriteIds = remember(openRouterModels, favoritesVersion) { repository.getPostProcessingFavoriteIds(PostProcessingProvider.OPENROUTER) }
+    fun refreshFavorites() { favoritesVersion++ }
+
+    when (val currentRoute = route) {
+        ModelsRoute.Main -> ModelsMainScreen(
+            config = config,
+            repository = repository,
+            languageHints = languageHints,
+            preserveSpokenLanguage = preserveSpokenLanguage,
+            openRouterAudioModels = openRouterAudioModels,
+            openRouterAudioFavoriteIds = audioFavoriteIds,
+            modelStatus = modelStatus,
+            onConfigChange = onConfigChange,
+            onLanguageHintsChange = onLanguageHintsChange,
+            onPreserveSpokenLanguageChange = onPreserveSpokenLanguageChange,
+            onPreview = { showPreview = true },
+            onManageOpenRouterAudio = { route = ModelsRoute.OpenRouterAudio(it) },
+            onManagePostProcessing = { route = ModelsRoute.PostProcessing }
+        )
+        is ModelsRoute.OpenRouterAudio -> OpenRouterAudioPickerScreen(
+            slot = currentRoute.slot,
+            config = config,
+            models = openRouterAudioModels,
+            favoriteIds = audioFavoriteIds,
+            hasOpenRouterKey = hasOpenRouterKey,
+            modelStatus = modelStatus,
+            onBack = { route = ModelsRoute.Main },
+            onRefresh = onRefreshOpenRouterAudio,
+            onConfigChange = onConfigChange,
+            onToggleFavorite = {
+                repository.toggleOpenRouterAudioFavorite(it)
+                refreshFavorites()
+            }
+        )
+        ModelsRoute.PostProcessing -> PostProcessingPickerScreen(
+            config = config,
+            groqModels = groqModels,
+            openRouterModels = openRouterModels,
+            groqFavoriteIds = groqPostFavoriteIds,
+            openRouterFavoriteIds = openRouterPostFavoriteIds,
+            hasGroqKey = hasGroqKey,
+            hasOpenRouterKey = hasOpenRouterKey,
+            modelStatus = modelStatus,
+            onBack = { route = ModelsRoute.Main },
+            onConfigChange = onConfigChange,
+            onRefreshGroq = onRefreshGroq,
+            onRefreshOpenRouter = onRefreshOpenRouter,
+            onToggleFavorite = { provider, modelId ->
+                repository.togglePostProcessingFavorite(provider, modelId)
+                refreshFavorites()
+            }
+        )
+    }
+
+    if (showPreview) {
+        PipelinePreviewDialog(repository = repository, config = config, onDismiss = { showPreview = false })
+    }
+}
+
+@Composable
+private fun ModelsMainScreen(
+    config: PipelineConfig,
+    repository: VoiceSlipRepository,
+    languageHints: String,
+    preserveSpokenLanguage: Boolean,
+    openRouterAudioModels: List<ModelOption>,
+    openRouterAudioFavoriteIds: List<String>,
+    modelStatus: String?,
+    onConfigChange: (PipelineConfig) -> Unit,
+    onLanguageHintsChange: (String) -> Unit,
+    onPreserveSpokenLanguageChange: (Boolean) -> Unit,
+    onPreview: () -> Unit,
+    onManageOpenRouterAudio: (OpenRouterAudioSlot) -> Unit,
+    onManagePostProcessing: () -> Unit
+) {
+    val favoriteAudioRows = remember(openRouterAudioModels, openRouterAudioFavoriteIds) {
+        modelRows(openRouterAudioModels, openRouterAudioFavoriteIds, selectedId = null, query = "", favoritesOnly = true, fallbackProvider = "OpenRouter")
     }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle("Models")
@@ -668,7 +783,7 @@ private fun ModelsScreen(
                             Text("Pipeline preview", fontWeight = FontWeight.SemiBold)
                             Text("Shows providers, prompts, dictionary routing, and insertion fallback.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        OutlinedButton(onClick = { showPreview = true }) { Text("Preview") }
+                        OutlinedButton(onClick = onPreview) { Text("Preview") }
                     }
                 }
             }
@@ -690,20 +805,15 @@ private fun ModelsScreen(
                         value = languageHints,
                         onValueChange = onLanguageHintsChange,
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Optional hints") },
+                        label = { Text("Comma-separated languages") },
                         singleLine = true,
                         enabled = preserveSpokenLanguage
                     )
-                    Text(
-                        if (!preserveSpokenLanguage) {
-                            "Hints stay saved locally but are not sent while language preservation is off."
-                        } else if (languageHints.isBlank()) {
-                            "Prompts include: Do not translate; output in the spoken language."
-                        } else {
-                            "Prompts include: Do not translate; output in the spoken language. Language hints: ${languageHints.trim()}."
-                        },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (preserveSpokenLanguage) {
+                        val helperText = buildLanguageHintExamples(languageHints)
+                            .ifBlank { "Prompts preserve the spoken language and do not translate." }
+                        Text(helperText, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
             item {
@@ -724,8 +834,11 @@ private fun ModelsScreen(
                     SettingsCard {
                         Text("Transcription engine", fontWeight = FontWeight.SemiBold)
                         TranscriptionEngineChoiceColumn(
-                            selected = config.transcriptionEngine,
-                            onSelect = { onConfigChange(config.copy(transcriptionEngine = it)) }
+                            config = config,
+                            openRouterAudioRows = favoriteAudioRows,
+                            onSelectBuiltIn = { onConfigChange(config.copy(transcriptionEngineKind = EngineKind.BUILT_IN, transcriptionEngine = it)) },
+                            onSelectOpenRouter = { onConfigChange(config.copy(transcriptionEngineKind = EngineKind.OPENROUTER_AUDIO, openRouterAudioTranscriptionModel = it)) },
+                            onManageOpenRouterAudio = { onManageOpenRouterAudio(OpenRouterAudioSlot.TRANSCRIPTION) }
                         )
                     }
                 }
@@ -734,8 +847,11 @@ private fun ModelsScreen(
                     SettingsCard {
                         Text("Audio direct model", fontWeight = FontWeight.SemiBold)
                         AudioDirectChoiceColumn(
-                            selected = config.audioDirectEngine,
-                            onSelect = { onConfigChange(config.copy(audioDirectEngine = it)) }
+                            config = config,
+                            openRouterAudioRows = favoriteAudioRows,
+                            onSelectBuiltIn = { onConfigChange(config.copy(audioDirectEngineKind = EngineKind.BUILT_IN, audioDirectEngine = it)) },
+                            onSelectOpenRouter = { onConfigChange(config.copy(audioDirectEngineKind = EngineKind.OPENROUTER_AUDIO, openRouterAudioDirectModel = it)) },
+                            onManageOpenRouterAudio = { onManageOpenRouterAudio(OpenRouterAudioSlot.AUDIO_DIRECT) }
                         )
                     }
                 }
@@ -749,26 +865,14 @@ private fun ModelsScreen(
                             selected = config.postProcessingProvider.label.takeIf { config.postProcessingProvider != PostProcessingProvider.NONE }.orEmpty()
                         ) { label ->
                             val provider = PostProcessingProvider.entries.first { it.label == label }
-                            onConfigChange(config.copy(postProcessingProvider = provider, postProcessingModel = ""))
+                            onConfigChange(config.copy(postProcessingProvider = provider))
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = onRefreshGroq, enabled = hasGroqKey) { Text("Refresh Groq") }
-                            OutlinedButton(onClick = onRefreshOpenRouter, enabled = hasOpenRouterKey) { Text("Refresh OpenRouter") }
-                        }
-                        modelStatus?.let {
-                            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                item {
-                    SettingsCard {
-                        Text("Post-processing model", fontWeight = FontWeight.SemiBold)
-                        ModelSelector(
-                            models = postModels,
-                            selectedModel = config.postProcessingModel,
-                            enabled = config.postProcessingProvider != PostProcessingProvider.NONE,
-                            onSelected = { onConfigChange(config.copy(postProcessingModel = it)) }
-                        )
+                        Text("Selected: ${config.postProcessingModel.ifBlank { "(select model)" }}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        OutlinedButton(
+                            onClick = onManagePostProcessing,
+                            enabled = config.postProcessingProvider != PostProcessingProvider.NONE
+                        ) { Text("Choose model") }
+                        modelStatus?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                 }
             }
@@ -783,96 +887,253 @@ private fun ModelsScreen(
             }
         }
     }
-    if (showPreview) {
-        PipelinePreviewDialog(repository = repository, config = config, onDismiss = { showPreview = false })
-    }
 }
 
+private sealed class ModelsRoute {
+    object Main : ModelsRoute()
+    data class OpenRouterAudio(val slot: OpenRouterAudioSlot) : ModelsRoute()
+    object PostProcessing : ModelsRoute()
+}
+
+private enum class OpenRouterAudioSlot(val title: String) {
+    TRANSCRIPTION("Choose transcription model"),
+    AUDIO_DIRECT("Choose audio direct model")
+}
+
+private data class ModelDisplayRow(
+    val id: String,
+    val name: String,
+    val provider: String,
+    val isAvailable: Boolean
+)
+
 @Composable
-private fun ModelSelector(
+private fun OpenRouterAudioPickerScreen(
+    slot: OpenRouterAudioSlot,
+    config: PipelineConfig,
     models: List<ModelOption>,
-    selectedModel: String,
-    enabled: Boolean,
-    onSelected: (String) -> Unit
+    favoriteIds: List<String>,
+    hasOpenRouterKey: Boolean,
+    modelStatus: String?,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onConfigChange: (PipelineConfig) -> Unit,
+    onToggleFavorite: (String) -> Unit
 ) {
-    var searchText by remember(selectedModel) { mutableStateOf(selectedModel) }
-    var selectedFromList by remember(selectedModel) { mutableStateOf(false) }
-    OutlinedTextField(
-        value = searchText,
-        onValueChange = {
-            searchText = it
-            selectedFromList = false
-            if (it == selectedModel) onSelected(it)
-        },
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text("Search models or enter ID") },
-        enabled = enabled,
-        singleLine = true
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            onClick = {
-                onSelected(searchText.trim())
-                selectedFromList = true
-            },
-            enabled = enabled && searchText.isNotBlank()
-        ) { Text("Use model") }
-        if (selectedModel.isNotBlank()) {
-            Text(
-                "Selected: $selectedModel",
-                modifier = Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+    BackHandler { onBack() }
+    var query by remember { mutableStateOf("") }
+    val selectedModel = when (slot) {
+        OpenRouterAudioSlot.TRANSCRIPTION -> config.openRouterAudioTranscriptionModel
+        OpenRouterAudioSlot.AUDIO_DIRECT -> config.openRouterAudioDirectModel
     }
-    val query = searchText.trim()
-    val filtered = models.filter {
-        query.isBlank() || it.id.contains(query, ignoreCase = true) || it.name.contains(query, ignoreCase = true)
+    val rows = remember(models, favoriteIds, selectedModel, query) {
+        modelRows(models, favoriteIds, selectedModel, query, fallbackProvider = "OpenRouter")
     }
-    if (filtered.isNotEmpty() && !selectedFromList) {
-        val listState = rememberLazyListState()
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            items(filtered.take(80), key = { it.id }) { model ->
-                ModelResultButton(model = model, enabled = enabled) {
-                    searchText = model.id
-                    onSelected(model.id)
-                    selectedFromList = true
+    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { ScreenHeader(slot.title, onBack) }
+        item {
+            SettingsCard {
+                Text("Current selected", fontWeight = FontWeight.SemiBold)
+                Text(selectedModel.ifBlank { "No OpenRouter audio model selected" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (selectedModel.isNotBlank() && rows.firstOrNull { it.id == selectedModel }?.isAvailable == false) {
+                    Text("Unavailable in latest refresh", color = MaterialTheme.colorScheme.error)
                 }
             }
         }
-        if (filtered.size > 80) {
-            Text(
-                "Showing 80 of ${filtered.size} matches. Type more to narrow the list.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Search models") },
+                singleLine = true
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = onRefresh, enabled = hasOpenRouterKey) { Text("Refresh") }
+                modelStatus?.let { Text(it, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            if (!hasOpenRouterKey) {
+                Text("Add an OpenRouter API key to refresh compatible audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else if (models.isEmpty()) {
+                Text("Refresh to load compatible OpenRouter audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (rows.isEmpty()) {
+            item { Text("No models match this search.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        items(rows, key = { it.id }) { row ->
+            ModelPickerRow(
+                row = row,
+                selected = row.id == selectedModel,
+                favorite = row.id in favoriteIds,
+                onClick = {
+                    val updated = when (slot) {
+                        OpenRouterAudioSlot.TRANSCRIPTION -> config.copy(
+                            transcriptionEngineKind = EngineKind.OPENROUTER_AUDIO,
+                            openRouterAudioTranscriptionModel = row.id
+                        )
+                        OpenRouterAudioSlot.AUDIO_DIRECT -> config.copy(
+                            audioDirectEngineKind = EngineKind.OPENROUTER_AUDIO,
+                            openRouterAudioDirectModel = row.id
+                        )
+                    }
+                    onConfigChange(updated)
+                },
+                onToggleFavorite = { onToggleFavorite(row.id) }
             )
         }
     }
 }
 
 @Composable
-private fun ModelResultButton(model: ModelOption, enabled: Boolean, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(Modifier.fillMaxWidth()) {
-            Text(model.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                model.id,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+private fun PostProcessingPickerScreen(
+    config: PipelineConfig,
+    groqModels: List<ModelOption>,
+    openRouterModels: List<ModelOption>,
+    groqFavoriteIds: List<String>,
+    openRouterFavoriteIds: List<String>,
+    hasGroqKey: Boolean,
+    hasOpenRouterKey: Boolean,
+    modelStatus: String?,
+    onBack: () -> Unit,
+    onConfigChange: (PipelineConfig) -> Unit,
+    onRefreshGroq: () -> Unit,
+    onRefreshOpenRouter: () -> Unit,
+    onToggleFavorite: (PostProcessingProvider, String) -> Unit
+) {
+    BackHandler { onBack() }
+    var query by remember { mutableStateOf("") }
+    val activeProvider = if (config.postProcessingProvider == PostProcessingProvider.NONE) PostProcessingProvider.GROQ else config.postProcessingProvider
+    val models = if (activeProvider == PostProcessingProvider.GROQ) groqModels else openRouterModels
+    val favoriteIds = if (activeProvider == PostProcessingProvider.GROQ) groqFavoriteIds else openRouterFavoriteIds
+    val selectedModel = when (activeProvider) {
+        PostProcessingProvider.GROQ -> config.groqPostProcessingModel
+        PostProcessingProvider.OPENROUTER -> config.openRouterPostProcessingModel
+        PostProcessingProvider.NONE -> ""
+    }
+    val hasKey = if (activeProvider == PostProcessingProvider.GROQ) hasGroqKey else hasOpenRouterKey
+    val rows = remember(models, favoriteIds, selectedModel, query, activeProvider) { modelRows(models, favoriteIds, selectedModel, query, fallbackProvider = activeProvider.label) }
+    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { ScreenHeader("Choose post-processing model", onBack) }
+        item {
+            SettingsCard {
+                Text("Provider", fontWeight = FontWeight.SemiBold)
+                ChoiceRow(
+                    options = listOf(PostProcessingProvider.GROQ.label, PostProcessingProvider.OPENROUTER.label),
+                    selected = activeProvider.label
+                ) { label ->
+                    val provider = PostProcessingProvider.entries.first { it.label == label }
+                    onConfigChange(config.copy(postProcessingProvider = provider))
+                    query = ""
+                }
+                Text("Current selected", fontWeight = FontWeight.SemiBold)
+                Text(selectedModel.ifBlank { "No ${activeProvider.label} model selected" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (selectedModel.isNotBlank() && rows.firstOrNull { it.id == selectedModel }?.isAvailable == false) {
+                    Text("Unavailable in latest refresh", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Search models") },
+                singleLine = true
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    onClick = if (activeProvider == PostProcessingProvider.GROQ) onRefreshGroq else onRefreshOpenRouter,
+                    enabled = hasKey
+                ) { Text("Refresh ${activeProvider.label}") }
+                modelStatus?.let { Text(it, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            if (!hasKey) {
+                Text("Add a ${activeProvider.label} API key to refresh models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else if (models.isEmpty()) {
+                Text("Refresh to load ${activeProvider.label} models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (rows.isEmpty()) {
+            item { Text("No models match this search.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        items(rows, key = { it.id }) { row ->
+            ModelPickerRow(
+                row = row,
+                selected = row.id == selectedModel,
+                favorite = row.id in favoriteIds,
+                onClick = { onConfigChange(config.copy(postProcessingProvider = activeProvider).withPostProcessingModel(row.id)) },
+                onToggleFavorite = { onToggleFavorite(activeProvider, row.id) }
             )
         }
     }
+}
+
+@Composable
+private fun ModelPickerRow(
+    row: ModelDisplayRow,
+    selected: Boolean,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit
+) {
+    val container = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
+    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = container)
+    ) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(row.name, fontWeight = FontWeight.SemiBold, color = contentColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(modelRowSubtitle(row), color = if (selected) contentColor else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = onToggleFavorite) {
+                Icon(
+                    imageVector = if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                    contentDescription = if (favorite) "Remove favorite" else "Add favorite",
+                    tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun modelRows(
+    models: List<ModelOption>,
+    favoriteIds: List<String>,
+    selectedId: String?,
+    query: String,
+    favoritesOnly: Boolean = false,
+    fallbackProvider: String = "OpenRouter"
+): List<ModelDisplayRow> {
+    val cachedById = models.associateBy { it.id }
+    val orderedIds = mutableListOf<String>()
+    favoriteIds.forEach { if (it !in orderedIds) orderedIds += it }
+    selectedId?.takeIf { it.isNotBlank() && it !in orderedIds && !favoritesOnly }?.let { orderedIds += it }
+    if (!favoritesOnly) {
+        models.map { it.id }.forEach { if (it !in orderedIds) orderedIds += it }
+    }
+    val cleanQuery = query.trim()
+    return orderedIds.mapNotNull { id ->
+        val model = cachedById[id]
+        val row = ModelDisplayRow(
+            id = id,
+            name = model?.name ?: id,
+            provider = model?.provider?.takeIf { it.isNotBlank() } ?: fallbackProvider,
+            isAvailable = model != null
+        )
+        row.takeIf { cleanQuery.isBlank() || it.id.contains(cleanQuery, true) || it.name.contains(cleanQuery, true) }
+    }
+}
+
+private fun modelRowSubtitle(row: ModelDisplayRow): String {
+    val availability = if (row.isAvailable) "" else " · Unavailable in latest refresh"
+    return "${row.provider} · ${row.id}$availability"
 }
 
 @Composable
@@ -904,25 +1165,45 @@ private fun ChoiceColumn(options: List<String>, selected: String, onSelect: (Str
 
 @Composable
 private fun TranscriptionEngineChoiceColumn(
-    selected: TranscriptionEngineId,
-    onSelect: (TranscriptionEngineId) -> Unit
+    config: PipelineConfig,
+    openRouterAudioRows: List<ModelDisplayRow>,
+    onSelectBuiltIn: (TranscriptionEngineId) -> Unit,
+    onSelectOpenRouter: (String) -> Unit,
+    onManageOpenRouterAudio: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         TranscriptionEngineId.entries.forEach { engine ->
             EngineChoiceButton(
                 title = engine.displayName,
                 detail = "${engine.provider.label} · ${engine.model} · ${engineRole(engine)}",
-                selected = engine == selected,
-                onClick = { onSelect(engine) }
+                selected = config.transcriptionEngineKind == EngineKind.BUILT_IN && engine == config.transcriptionEngine,
+                onClick = { onSelectBuiltIn(engine) }
             )
         }
+        Text("OpenRouter audio", fontWeight = FontWeight.SemiBold)
+        if (openRouterAudioRows.isEmpty()) {
+            Text("No favorites yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            openRouterAudioRows.forEach { row ->
+                EngineChoiceButton(
+                    title = row.name,
+                    detail = "OpenRouter · ${row.id} · audio${if (row.isAvailable) "" else " · Unavailable in latest refresh"}",
+                    selected = config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO && config.openRouterAudioTranscriptionModel == row.id,
+                    onClick = { onSelectOpenRouter(row.id) }
+                )
+            }
+        }
+        OutlinedButton(onClick = onManageOpenRouterAudio, modifier = Modifier.fillMaxWidth()) { Text("Manage OpenRouter audio models") }
     }
 }
 
 @Composable
 private fun AudioDirectChoiceColumn(
-    selected: AudioDirectEngineId,
-    onSelect: (AudioDirectEngineId) -> Unit
+    config: PipelineConfig,
+    openRouterAudioRows: List<ModelDisplayRow>,
+    onSelectBuiltIn: (AudioDirectEngineId) -> Unit,
+    onSelectOpenRouter: (String) -> Unit,
+    onManageOpenRouterAudio: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         AudioDirectEngineId.entries.forEach { engine ->
@@ -934,10 +1215,24 @@ private fun AudioDirectChoiceColumn(
             EngineChoiceButton(
                 title = engine.displayName,
                 detail = "${engine.provider.label} · ${engine.model} · audio chat -> final text$warning",
-                selected = engine == selected,
-                onClick = { onSelect(engine) }
+                selected = config.audioDirectEngineKind == EngineKind.BUILT_IN && engine == config.audioDirectEngine,
+                onClick = { onSelectBuiltIn(engine) }
             )
         }
+        Text("OpenRouter audio", fontWeight = FontWeight.SemiBold)
+        if (openRouterAudioRows.isEmpty()) {
+            Text("No favorites yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            openRouterAudioRows.forEach { row ->
+                EngineChoiceButton(
+                    title = row.name,
+                    detail = "OpenRouter · ${row.id} · audio${if (row.isAvailable) "" else " · Unavailable in latest refresh"}",
+                    selected = config.audioDirectEngineKind == EngineKind.OPENROUTER_AUDIO && config.openRouterAudioDirectModel == row.id,
+                    onClick = { onSelectOpenRouter(row.id) }
+                )
+            }
+        }
+        OutlinedButton(onClick = onManageOpenRouterAudio, modifier = Modifier.fillMaxWidth()) { Text("Manage OpenRouter audio models") }
     }
 }
 
@@ -975,51 +1270,31 @@ private fun engineRole(engine: TranscriptionEngineId): String {
 private fun activePipelineText(config: PipelineConfig): String {
     return when (config.mode) {
         PipelineMode.PURE_TRANSCRIPTION ->
-            "Active: ${config.transcriptionEngine.displayName} (${config.transcriptionEngine.model}). Final text is the raw transcript."
+            "Active: ${config.transcriptionDisplayName()} (${config.transcriptionModel()}). Final text is the raw transcript."
         PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ->
-            "Active: ${config.transcriptionEngine.displayName} (${config.transcriptionEngine.model}) -> ${config.postProcessingProvider.label} ${config.postProcessingModel.ifBlank { "(select model)" }}. Style is resolved from the Style tab at recording start."
+            "Active: ${config.transcriptionDisplayName()} (${config.transcriptionModel()}) -> ${config.postProcessingProvider.label} ${config.postProcessingModel.ifBlank { "(select model)" }}. Style is resolved from the Style tab at recording start."
         PipelineMode.AUDIO_DIRECT ->
-            "Active: ${config.audioDirectEngine.displayName} (${config.audioDirectEngine.model}) with the recording-start style prompt in one call."
+            "Active: ${config.audioDirectDisplayName()} (${config.audioDirectModel()}) with the recording-start style prompt in one call."
     }
 }
 
-private fun languageInstructionPreview(languageHints: String, preserveSpokenLanguage: Boolean): String =
-    if (!preserveSpokenLanguage) {
-        "(omitted)"
-    } else if (languageHints.isBlank()) {
-        "Do not translate; output in the spoken language."
-    } else {
-        "Do not translate; output in the spoken language. Language hints: ${languageHints.trim()}."
-    }
+private const val DETECTED_LANGUAGE_PLACEHOLDER = "{{detected_language}}"
+
+private fun audioLanguagePreview(languageHints: String, preserveSpokenLanguage: Boolean): String =
+    buildAudioLanguageBlock(languageHints, preserveSpokenLanguage) ?: "Language: (omitted)"
 
 private fun postProcessingLanguagePreview(preserveSpokenLanguage: Boolean): String =
-    if (preserveSpokenLanguage) {
-        "Do not translate; keep the output in the detected/spoken language. Detected language: {{detected_language}}."
-    } else {
-        "(omitted)"
-    }
+    buildPostProcessingLanguageBlock(DETECTED_LANGUAGE_PLACEHOLDER, preserveSpokenLanguage) ?: "Language: (omitted)"
 
 private fun audioChatTranscriptionPromptPreview(languageHints: String, preserveSpokenLanguage: Boolean, dictionaryPrompt: String?): String =
-    buildString {
-        appendLine("Transcribe the attached audio faithfully. Return only the transcript text.")
-        appendLine()
-        if (preserveSpokenLanguage) {
-            appendLine(languageInstructionPreview(languageHints, true))
-            appendLine()
-        }
-        appendLine("Do not answer questions, summarize, add commentary, include labels, JSON, markdown, explanations, or alternatives.")
-        dictionaryPrompt?.let {
-            appendLine()
-            append(it)
-        }
-    }
+    buildAudioTranscriptionPromptPreview(languageHints, preserveSpokenLanguage, dictionaryPrompt)
 
 private fun postProcessingSystemPromptPreview(cleanupPolicy: String, preserveSpokenLanguage: Boolean, dictionarySize: Int): String =
     buildString {
         appendLine("Clean this raw transcript and return the final insertable text.")
         appendLine()
-        if (preserveSpokenLanguage) {
-            appendLine(postProcessingLanguagePreview(true))
+        buildPostProcessingLanguageBlock(DETECTED_LANGUAGE_PLACEHOLDER, preserveSpokenLanguage)?.let {
+            appendLine(it)
             appendLine()
         }
         appendLine("Follow these global cleanup rules:")
@@ -1038,25 +1313,29 @@ private fun audioDirectPromptPreview(
     languageHints: String,
     preserveSpokenLanguage: Boolean,
     dictionarySize: Int
-): String = buildString {
-    appendLine("Transcribe the attached audio faithfully and return the final insertable text.")
-    appendLine()
-    if (preserveSpokenLanguage) {
-        appendLine(languageInstructionPreview(languageHints, true))
-        appendLine()
-    }
-    appendLine("Follow these global cleanup rules:")
-    appendLine(cleanupPolicy)
-    appendLine()
-    appendLine("Apply this formatting style:")
-    appendLine(stylePrompt)
-    appendLine()
-    appendLine("Return only the final text. Do not include labels, JSON, markdown, explanations, or alternatives.")
-    if (dictionarySize > 0) {
-        appendLine()
-        append("Use these spelling constraints when they match the audio: {{dictionary_terms}}.")
-    }
+): String = buildAudioDirectPrompt(
+    cleanupPolicy = cleanupPolicy,
+    stylePrompt = stylePrompt,
+    languageHints = languageHints,
+    preserveSpokenLanguage = preserveSpokenLanguage,
+    dictionaryTerms = if (dictionarySize > 0) listOf("{{dictionary_terms}}") else emptyList()
+)
+
+private fun transcriptionDisplayName(repository: VoiceSlipRepository, config: PipelineConfig): String {
+    if (config.transcriptionEngineKind == EngineKind.BUILT_IN) return config.transcriptionEngine.displayName
+    val model = config.openRouterAudioTranscriptionModel
+    return repository.getCachedOpenRouterAudioModels().firstOrNull { it.id == model }?.name ?: model.ifBlank { "OpenRouter audio" }
 }
+
+private fun transcriptionEndpoint(config: PipelineConfig): String = when {
+    config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO -> "/api/v1/chat/completions"
+    config.transcriptionEngine.provider == ProviderId.GROQ -> "/openai/v1/audio/transcriptions"
+    config.transcriptionEngine.audioChat -> "/v1/chat/completions"
+    else -> "/v1/audio/transcriptions"
+}
+
+private fun openRouterAudioModelAvailable(repository: VoiceSlipRepository, modelId: String): Boolean =
+    repository.getCachedOpenRouterAudioModels().any { it.id == modelId }
 
 private fun pipelineModeExplanation(mode: PipelineMode): String {
     return when (mode) {
@@ -1072,31 +1351,42 @@ private fun pipelineModeExplanation(mode: PipelineMode): String {
 @Composable
 private fun DictionaryRoutingCard(repository: VoiceSlipRepository, config: PipelineConfig) {
     val entries = repository.listDictionary()
-    val engine = config.transcriptionEngine
-    var routing by remember(config.transcriptionEngine) { mutableStateOf(repository.routingForEngine(engine.name)) }
+    val routingId = if (config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID else config.transcriptionEngine.name
+    val engineName = if (config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) "OpenRouter audio" else config.transcriptionEngine.displayName
+    var routing by remember(routingId) { mutableStateOf(repository.routingForEngine(routingId)) }
     val plan = remember(routing, entries, config) {
-        if (config.mode == PipelineMode.AUDIO_DIRECT) null else repository.dictionaryPlanForTranscription(engine, entries.map { it.phrase })
+        if (config.mode == PipelineMode.AUDIO_DIRECT) null else repository.dictionaryPlanForTranscription(config, entries.map { it.phrase })
     }
     SettingsCard {
         Text("Dictionary routing", fontWeight = FontWeight.SemiBold)
         if (config.mode == PipelineMode.AUDIO_DIRECT) {
             Text("Audio direct: full dictionary is sent as spelling constraints in the audio prompt.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
+            val routingEnabled = routing.sendDictionaryToTranscription
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("${engine.displayName}: ${if (routing.sendDictionaryToTranscription) "On" else "Off"}")
-                    Text(plan?.mechanism.orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(engineName)
+                    if (routingEnabled) {
+                        plan?.mechanism
+                            ?.takeUnless { it.isBlank() || it == "Off" }
+                            ?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
                 }
                 SettingsSwitch(
-                    checked = routing.sendDictionaryToTranscription,
+                    checked = routingEnabled,
                     onCheckedChange = {
-                        repository.setRoutingForEngine(engine.name, it)
-                        routing = EngineDictionaryRoutingEntity(engine.name, it)
+                        repository.setRoutingForEngine(routingId, it)
+                        routing = EngineDictionaryRoutingEntity(routingId, it)
                     }
                 )
             }
-            if (plan?.limit != null) {
-                Text("Prompt limit: ${plan.limit} chars. Terms included: ${plan.includedTerms} of ${plan.totalTerms}.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (routingEnabled && entries.isEmpty()) {
+                Text("No dictionary terms saved yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (routingEnabled && plan != null && plan.includedTerms > 0) {
+                val termsText = "Terms included: ${plan.includedTerms} of ${plan.totalTerms}."
+                val detail = plan.limit?.let { "Prompt limit: $it. $termsText" } ?: termsText
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Text("Full dictionary is always used during cleanup.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1107,10 +1397,13 @@ private fun DictionaryRoutingCard(repository: VoiceSlipRepository, config: Pipel
 private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: PipelineConfig, onDismiss: () -> Unit) {
     val dictionary = repository.listDictionary().map { it.phrase }
     val resolution = repository.resolveStyleForPackage(null)
-    val transcriptionPlan = if (config.mode == PipelineMode.AUDIO_DIRECT) null else repository.dictionaryPlanForTranscription(config.transcriptionEngine, dictionary)
+    val transcriptionPlan = if (config.mode == PipelineMode.AUDIO_DIRECT) null else repository.dictionaryPlanForTranscription(config, dictionary)
     val cleanupPolicy = repository.getCleanupPolicy()
     val languageHints = repository.getLanguageHints()
     val preserveSpokenLanguage = repository.getPreserveSpokenLanguage()
+    val transcriptionProvider = config.transcriptionProvider()
+    val transcriptionUsesAudioPrompt = config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO || config.transcriptionEngine.audioChat
+    val audioDirectProvider = config.audioDirectProvider()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Pipeline Preview") },
@@ -1123,19 +1416,25 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                 if (config.mode != PipelineMode.AUDIO_DIRECT) {
                     item {
                         Text("Step 1: Transcription", fontWeight = FontWeight.SemiBold)
-                        Text("Provider: ${config.transcriptionEngine.provider.label}")
-                        Text("Engine: ${config.transcriptionEngine.displayName}")
-                        Text("Model: ${config.transcriptionEngine.model}")
-                        Text("Endpoint: ${if (config.transcriptionEngine.provider == ProviderId.GROQ) "/openai/v1/audio/transcriptions" else if (config.transcriptionEngine.audioChat) "/v1/chat/completions" else "/v1/audio/transcriptions"}")
+                        Text("Provider: ${transcriptionProvider.label}")
+                        Text("Engine: ${transcriptionDisplayName(repository, config)}")
+                        Text("Model: ${config.transcriptionModel().ifBlank { "(select model)" }}")
+                        if (config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO && config.openRouterAudioTranscriptionModel.isNotBlank() && !openRouterAudioModelAvailable(repository, config.openRouterAudioTranscriptionModel)) {
+                            Text("Unavailable in latest refresh", color = MaterialTheme.colorScheme.error)
+                        }
+                        Text("Endpoint: ${transcriptionEndpoint(config)}")
                         Text("Audio: WAV, 16 kHz mono")
-                        if (config.transcriptionEngine.audioChat) {
-                            Text("Language: ${languageInstructionPreview(languageHints, preserveSpokenLanguage)}")
+                        if (config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) {
+                            Text("Audio input: base64 input_audio")
+                        }
+                        if (transcriptionUsesAudioPrompt) {
+                            Text(audioLanguagePreview(languageHints, preserveSpokenLanguage))
                         }
                         transcriptionPlan?.let {
                             Text("Dictionary: ${it.mechanism}")
                             it.limit?.let { limit -> Text("Prompt limit: $limit chars") }
                             Text("Terms included: ${it.includedTerms} of ${it.totalTerms}")
-                            if (config.transcriptionEngine.audioChat) {
+                            if (transcriptionUsesAudioPrompt) {
                                 Text("Prompt sent:\n${audioChatTranscriptionPromptPreview(languageHints, preserveSpokenLanguage, it.prompt)}")
                             } else {
                                 it.prompt?.let { prompt -> Text("Prompt sent:\n$prompt") }
@@ -1149,7 +1448,7 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Provider: ${config.postProcessingProvider.label}")
                         Text("Model: ${config.postProcessingModel.ifBlank { "(select model)" }}")
                         Text("Dictionary: ${dictionary.size} of ${dictionary.size} terms included as spelling constraints")
-                        Text("Language: ${postProcessingLanguagePreview(preserveSpokenLanguage)}")
+                        Text(postProcessingLanguagePreview(preserveSpokenLanguage))
                         Text("Resolved style: {{style_prompt}}")
                         Text("System prompt:\n${postProcessingSystemPromptPreview(cleanupPolicy, preserveSpokenLanguage, dictionary.size)}")
                         Text("User prompt:\nApply this formatting style:\n${resolution.stylePrompt}\n\nRaw transcript:\n{{raw_transcript}}")
@@ -1158,10 +1457,17 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                 if (config.mode == PipelineMode.AUDIO_DIRECT) {
                     item {
                         Text("Step 1: Audio direct", fontWeight = FontWeight.SemiBold)
-                        Text("Provider: ${config.audioDirectEngine.provider.label}")
-                        Text("Model: ${config.audioDirectEngine.model}")
+                        Text("Provider: ${audioDirectProvider.label}")
+                        Text("Model: ${config.audioDirectModel().ifBlank { "(select model)" }}")
+                        if (config.audioDirectEngineKind == EngineKind.OPENROUTER_AUDIO && config.openRouterAudioDirectModel.isNotBlank() && !openRouterAudioModelAvailable(repository, config.openRouterAudioDirectModel)) {
+                            Text("Unavailable in latest refresh", color = MaterialTheme.colorScheme.error)
+                        }
+                        Text("Endpoint: ${if (audioDirectProvider == ProviderId.OPENROUTER) "/api/v1/chat/completions" else "/v1/chat/completions"}")
+                        if (audioDirectProvider == ProviderId.OPENROUTER) {
+                            Text("Audio input: base64 input_audio")
+                        }
                         Text("Dictionary: full dictionary included in prompt")
-                        Text("Language: ${languageInstructionPreview(languageHints, preserveSpokenLanguage)}")
+                        Text(audioLanguagePreview(languageHints, preserveSpokenLanguage))
                         Text("Resolved style: {{style_prompt}}")
                         Text("Prompt:\n${audioDirectPromptPreview(cleanupPolicy, resolution.stylePrompt, languageHints, preserveSpokenLanguage, dictionary.size)}")
                     }
@@ -1334,12 +1640,12 @@ private fun StyleHomeScreen(
             CategoryCard(category, styleName, categoryApps) { onRoute(StyleRoute.CategoryDetail(category.id)) }
         }
         item {
-            EntryRow("All Apps", "Search and change app categories") { onRoute(StyleRoute.AllApps) }
-            Spacer(Modifier.height(8.dp))
-            EntryRow("Style Library", "Edit style prompts and create reusable styles") { onRoute(StyleRoute.StyleLibrary()) }
-            Spacer(Modifier.height(8.dp))
-            EntryRow("Prompt Settings", "Edit the shared cleanup policy") { onRoute(StyleRoute.PromptSettings) }
+            Spacer(Modifier.height(12.dp))
+            Text("Manage", fontWeight = FontWeight.SemiBold)
         }
+        item { EntryRow("All Apps", "Search and change app categories") { onRoute(StyleRoute.AllApps) } }
+        item { EntryRow("Style Library", "Edit style prompts and create reusable styles") { onRoute(StyleRoute.StyleLibrary()) } }
+        item { EntryRow("Prompt Settings", "Edit the shared cleanup policy") { onRoute(StyleRoute.PromptSettings) } }
     }
     if (showNewCategory) {
         AlertDialog(
@@ -2114,11 +2420,11 @@ private fun DictionaryScreen(repository: VoiceSlipRepository, config: PipelineCo
 @Composable
 private fun DictionaryWarning(repository: VoiceSlipRepository, config: PipelineConfig, entries: List<DictionaryEntry>) {
     if (config.mode == PipelineMode.AUDIO_DIRECT) return
-    val plan = repository.dictionaryPlanForTranscription(config.transcriptionEngine, entries.map { it.phrase })
+    val plan = repository.dictionaryPlanForTranscription(config, entries.map { it.phrase })
     if (!plan.truncated) return
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer), shape = RoundedCornerShape(8.dp)) {
         Text(
-            "Current pipeline uses ${config.transcriptionEngine.displayName}. Only the first ${plan.includedTerms} of ${plan.totalTerms} terms fit in the transcription prompt. The full dictionary is still used during cleanup.",
+            "Current pipeline uses ${config.transcriptionDisplayName()}. Only the first ${plan.includedTerms} of ${plan.totalTerms} terms fit in the transcription prompt. The full dictionary is still used during cleanup.",
             modifier = Modifier.padding(14.dp),
             color = MaterialTheme.colorScheme.onErrorContainer
         )

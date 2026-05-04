@@ -27,22 +27,22 @@ class PipelineExecutor(
         validate(config)
         return when (config.mode) {
             PipelineMode.PURE_TRANSCRIPTION -> {
-                val transcript = runTranscription(config.transcriptionEngine, audioFile, transcriptionDictionaryTerms, languageHints, preserveSpokenLanguage)
+                val transcript = runTranscription(config, audioFile, transcriptionDictionaryTerms, languageHints, preserveSpokenLanguage)
                 PipelineResult(
                     rawTranscript = transcript.text,
                     finalText = transcript.text,
                     detectedLanguage = transcript.language,
-                    pipelineSummary = config.transcriptionEngine.displayName,
-                    provider = transcript.engine.provider.name.lowercase(),
+                    pipelineSummary = transcript.displayName,
+                    provider = transcript.provider.name.lowercase(),
                     model = transcript.result.model,
-                    transcriptionProvider = transcript.engine.provider.name,
+                    transcriptionProvider = transcript.provider.name,
                     transcriptionModel = transcript.result.model,
                     stylePreset = styleId,
                     metadataJson = transcript.result.metadata
                 )
             }
             PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING -> {
-                val transcript = runTranscription(config.transcriptionEngine, audioFile, transcriptionDictionaryTerms, languageHints, preserveSpokenLanguage)
+                val transcript = runTranscription(config, audioFile, transcriptionDictionaryTerms, languageHints, preserveSpokenLanguage)
                 val processed = runPostProcessing(
                     config.postProcessingProvider,
                     config.postProcessingModel,
@@ -57,10 +57,10 @@ class PipelineExecutor(
                     rawTranscript = transcript.result.text,
                     finalText = processed.finalText,
                     detectedLanguage = transcript.result.language,
-                    pipelineSummary = "${config.transcriptionEngine.displayName} -> ${config.postProcessingProvider.label} ${processed.model}",
-                    provider = transcript.engine.provider.name.lowercase(),
+                    pipelineSummary = "${transcript.displayName} -> ${config.postProcessingProvider.label} ${processed.model}",
+                    provider = transcript.provider.name.lowercase(),
                     model = transcript.result.model,
-                    transcriptionProvider = transcript.engine.provider.name,
+                    transcriptionProvider = transcript.provider.name,
                     transcriptionModel = transcript.result.model,
                     postProcessingProvider = config.postProcessingProvider.name,
                     postProcessingModel = processed.model,
@@ -69,15 +69,15 @@ class PipelineExecutor(
                 )
             }
             PipelineMode.AUDIO_DIRECT -> {
-                val direct = runAudioDirect(config.audioDirectEngine, audioFile, dictionaryTerms, stylePrompt, cleanupPolicy, languageHints, preserveSpokenLanguage)
+                val direct = runAudioDirect(config, audioFile, dictionaryTerms, stylePrompt, cleanupPolicy, languageHints, preserveSpokenLanguage)
                 PipelineResult(
                     rawTranscript = null,
                     finalText = direct.result.finalText,
                     detectedLanguage = direct.result.language,
-                    pipelineSummary = config.audioDirectEngine.displayName,
-                    provider = direct.engine.provider.name.lowercase(),
+                    pipelineSummary = direct.displayName,
+                    provider = direct.provider.name.lowercase(),
                     model = direct.result.model,
-                    audioModelProvider = direct.engine.provider.name,
+                    audioModelProvider = direct.provider.name,
                     audioModel = direct.result.model,
                     stylePreset = styleName,
                     metadataJson = direct.result.metadata
@@ -98,12 +98,26 @@ class PipelineExecutor(
     }
 
     private fun runTranscription(
-        engine: TranscriptionEngineId,
+        config: PipelineConfig,
         audioFile: File,
         dictionaryTerms: List<String>,
         languageHints: String,
         preserveSpokenLanguage: Boolean
     ): TranscriptWithEngine {
+        if (config.transcriptionEngineKind == com.example.voiceslip.data.EngineKind.OPENROUTER_AUDIO) {
+            val model = config.openRouterAudioTranscriptionModel
+            val result = OpenRouterClient().transcribeAudio(
+                keyProvider(ProviderId.OPENROUTER).orEmpty(),
+                model,
+                audioFile,
+                dictionaryTerms,
+                languageHints,
+                preserveSpokenLanguage
+            )
+            if (result.text.isBlank()) throw PipelineException("transcription", "The transcription result was empty.")
+            return TranscriptWithEngine("OpenRouter audio $model", ProviderId.OPENROUTER, result)
+        }
+        val engine = config.transcriptionEngine
         val key = keyProvider(engine.provider).orEmpty()
         val result = when (engine.provider) {
             ProviderId.MISTRAL -> {
@@ -117,7 +131,7 @@ class PipelineExecutor(
             ProviderId.OPENROUTER -> throw PipelineException("configuration", "OpenRouter is not a transcription provider in V2.5.")
         }
         if (result.text.isBlank()) throw PipelineException("transcription", "The transcription result was empty.")
-        return TranscriptWithEngine(engine, result)
+        return TranscriptWithEngine(engine.displayName, engine.provider, result)
     }
 
     private fun runPostProcessing(
@@ -159,7 +173,7 @@ class PipelineExecutor(
     }
 
     private fun runAudioDirect(
-        engine: AudioDirectEngineId,
+        config: PipelineConfig,
         audioFile: File,
         dictionaryTerms: List<String>,
         stylePrompt: String,
@@ -167,10 +181,26 @@ class PipelineExecutor(
         languageHints: String,
         preserveSpokenLanguage: Boolean
     ): DirectWithEngine {
+        if (config.audioDirectEngineKind == com.example.voiceslip.data.EngineKind.OPENROUTER_AUDIO) {
+            val model = config.openRouterAudioDirectModel
+            val result = OpenRouterClient().directAudio(
+                keyProvider(ProviderId.OPENROUTER).orEmpty(),
+                model,
+                audioFile,
+                stylePrompt,
+                cleanupPolicy,
+                dictionaryTerms,
+                languageHints,
+                preserveSpokenLanguage
+            )
+            if (result.finalText.isBlank()) throw PipelineException("audio_direct", "The audio model returned empty text.")
+            return DirectWithEngine("OpenRouter audio $model", ProviderId.OPENROUTER, result)
+        }
+        val engine = config.audioDirectEngine
         val key = keyProvider(engine.provider).orEmpty()
         val result = MistralTranscriptionClient().directAudio(key, audioFile, engine, stylePrompt, cleanupPolicy, dictionaryTerms, languageHints, preserveSpokenLanguage)
         if (result.finalText.isBlank()) throw PipelineException("audio_direct", "The audio model returned empty text.")
-        return DirectWithEngine(engine, result)
+        return DirectWithEngine(engine.displayName, engine.provider, result)
     }
 }
 
@@ -240,7 +270,8 @@ class PipelineException(
 ) : IllegalStateException(message)
 
 private data class TranscriptWithEngine(
-    val engine: TranscriptionEngineId,
+    val displayName: String,
+    val provider: ProviderId,
     val result: TranscriptionResult
 ) {
     val text: String get() = result.text
@@ -248,6 +279,7 @@ private data class TranscriptWithEngine(
 }
 
 private data class DirectWithEngine(
-    val engine: AudioDirectEngineId,
+    val displayName: String,
+    val provider: ProviderId,
     val result: DirectAudioResult
 )

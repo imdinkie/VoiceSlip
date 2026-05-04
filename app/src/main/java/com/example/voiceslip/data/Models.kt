@@ -40,6 +40,17 @@ enum class PostProcessingProvider(val label: String) {
     OPENROUTER("OpenRouter")
 }
 
+enum class EngineKind {
+    BUILT_IN,
+    OPENROUTER_AUDIO
+}
+
+val DEFAULT_OPENROUTER_AUDIO_FAVORITES = listOf(
+    "google/gemini-3.1-flash-lite-preview",
+    "~google/gemini-pro-latest",
+    "~google/gemini-flash-latest"
+)
+
 enum class TranscriptionEngineId(
     val displayName: String,
     val provider: ProviderId,
@@ -94,29 +105,71 @@ enum class AudioDirectEngineId(
 
 data class PipelineConfig(
     val mode: PipelineMode = PipelineMode.PURE_TRANSCRIPTION,
+    val transcriptionEngineKind: EngineKind = EngineKind.BUILT_IN,
     val transcriptionEngine: TranscriptionEngineId = TranscriptionEngineId.MISTRAL_VOXTRAL_MINI_TRANSCRIBE,
+    val openRouterAudioTranscriptionModel: String = "",
+    val audioDirectEngineKind: EngineKind = EngineKind.BUILT_IN,
     val audioDirectEngine: AudioDirectEngineId = AudioDirectEngineId.MISTRAL_VOXTRAL_SMALL_AUDIO,
     val postProcessingProvider: PostProcessingProvider = PostProcessingProvider.NONE,
-    val postProcessingModel: String = ""
+    val groqPostProcessingModel: String = "",
+    val openRouterPostProcessingModel: String = "",
+    val openRouterAudioDirectModel: String = ""
 ) {
+    val postProcessingModel: String
+        get() = when (postProcessingProvider) {
+            PostProcessingProvider.GROQ -> groqPostProcessingModel
+            PostProcessingProvider.OPENROUTER -> openRouterPostProcessingModel
+            PostProcessingProvider.NONE -> ""
+        }
+
     fun requiredProviders(): Set<ProviderId> = buildSet {
         when (mode) {
-            PipelineMode.PURE_TRANSCRIPTION -> add(transcriptionEngine.provider)
+            PipelineMode.PURE_TRANSCRIPTION -> add(transcriptionProvider())
             PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING -> {
-                add(transcriptionEngine.provider)
+                add(transcriptionProvider())
                 when (postProcessingProvider) {
                     PostProcessingProvider.GROQ -> add(ProviderId.GROQ)
                     PostProcessingProvider.OPENROUTER -> add(ProviderId.OPENROUTER)
                     PostProcessingProvider.NONE -> Unit
                 }
             }
-            PipelineMode.AUDIO_DIRECT -> add(audioDirectEngine.provider)
+            PipelineMode.AUDIO_DIRECT -> add(audioDirectProvider())
         }
     }
 
     fun isRunnable(): Boolean {
-        return mode != PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ||
+        val hasValidModeSelection = when (mode) {
+            PipelineMode.PURE_TRANSCRIPTION,
+            PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING -> transcriptionEngineKind == EngineKind.BUILT_IN || openRouterAudioTranscriptionModel.isNotBlank()
+            PipelineMode.AUDIO_DIRECT -> audioDirectEngineKind == EngineKind.BUILT_IN || openRouterAudioDirectModel.isNotBlank()
+        }
+        val hasPostProcessing = mode != PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ||
             postProcessingProvider != PostProcessingProvider.NONE && postProcessingModel.isNotBlank()
+        return hasValidModeSelection && hasPostProcessing
+    }
+
+    fun transcriptionProvider(): ProviderId =
+        if (transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) ProviderId.OPENROUTER else transcriptionEngine.provider
+
+    fun transcriptionModel(): String =
+        if (transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) openRouterAudioTranscriptionModel else transcriptionEngine.model
+
+    fun transcriptionDisplayName(): String =
+        if (transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) openRouterAudioTranscriptionModel.ifBlank { "OpenRouter audio" } else transcriptionEngine.displayName
+
+    fun audioDirectProvider(): ProviderId =
+        if (audioDirectEngineKind == EngineKind.OPENROUTER_AUDIO) ProviderId.OPENROUTER else audioDirectEngine.provider
+
+    fun audioDirectModel(): String =
+        if (audioDirectEngineKind == EngineKind.OPENROUTER_AUDIO) openRouterAudioDirectModel else audioDirectEngine.model
+
+    fun audioDirectDisplayName(): String =
+        if (audioDirectEngineKind == EngineKind.OPENROUTER_AUDIO) openRouterAudioDirectModel.ifBlank { "OpenRouter audio" } else audioDirectEngine.displayName
+
+    fun withPostProcessingModel(model: String): PipelineConfig = when (postProcessingProvider) {
+        PostProcessingProvider.GROQ -> copy(groqPostProcessingModel = model)
+        PostProcessingProvider.OPENROUTER -> copy(openRouterPostProcessingModel = model)
+        PostProcessingProvider.NONE -> this
     }
 }
 

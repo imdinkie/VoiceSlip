@@ -447,7 +447,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 val transcriptionDictionary = if (config.mode == PipelineMode.AUDIO_DIRECT) {
                     dictionary
                 } else {
-                    val plan = repository.dictionaryPlanForTranscription(config.transcriptionEngine, dictionary)
+                    val plan = repository.dictionaryPlanForTranscription(config, dictionary)
                     dictionary.take(plan.includedTerms)
                 }
                 val pipeline = PipelineExecutor { secretStore.getApiKey(it) }.execute(
@@ -638,10 +638,10 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
 
     private fun pipelineSummary(config: com.example.voiceslip.data.PipelineConfig): String {
         return when (config.mode) {
-            PipelineMode.PURE_TRANSCRIPTION -> config.transcriptionEngine.displayName
+            PipelineMode.PURE_TRANSCRIPTION -> config.transcriptionDisplayName()
             PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ->
-                "${config.transcriptionEngine.displayName} -> ${config.postProcessingProvider.label} ${config.postProcessingModel}"
-            PipelineMode.AUDIO_DIRECT -> config.audioDirectEngine.displayName
+                "${config.transcriptionDisplayName()} -> ${config.postProcessingProvider.label} ${config.postProcessingModel}"
+            PipelineMode.AUDIO_DIRECT -> config.audioDirectDisplayName()
         }
     }
 }

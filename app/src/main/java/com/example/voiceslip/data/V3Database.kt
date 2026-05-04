@@ -5,11 +5,14 @@ import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
+import androidx.room.ColumnInfo
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import android.content.Context
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 const val CATEGORY_PERSONAL = "personal"
 const val CATEGORY_WORK = "work"
@@ -76,10 +79,22 @@ data class HistoryItemEntity(
 data class PipelineConfigEntity(
     @PrimaryKey val id: String = "current",
     val mode: String,
+    @ColumnInfo(defaultValue = "'BUILT_IN'")
+    val transcriptionEngineKind: String,
     val transcriptionEngine: String,
+    @ColumnInfo(defaultValue = "''")
+    val openRouterAudioTranscriptionModel: String,
+    @ColumnInfo(defaultValue = "'BUILT_IN'")
+    val audioDirectEngineKind: String,
     val audioDirectEngine: String,
     val postProcessingProvider: String,
-    val postProcessingModel: String
+    val postProcessingModel: String,
+    @ColumnInfo(defaultValue = "''")
+    val groqPostProcessingModel: String,
+    @ColumnInfo(defaultValue = "''")
+    val openRouterPostProcessingModel: String,
+    @ColumnInfo(defaultValue = "''")
+    val openRouterAudioDirectModel: String
 )
 
 @Entity(tableName = "styles")
@@ -237,7 +252,7 @@ interface VoiceSlipDao {
         EngineDictionaryRoutingEntity::class,
         PromptSettingEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class VoiceSlipDatabase : RoomDatabase() {
@@ -253,9 +268,23 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                     VoiceSlipDatabase::class.java,
                     "voiceslip_v3.db"
                 )
+                    .addMigrations(MIGRATION_1_2)
                     .allowMainThreadQueries()
                     .build()
                     .also { instance = it }
+            }
+        }
+
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN transcriptionEngineKind TEXT NOT NULL DEFAULT 'BUILT_IN'")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterAudioTranscriptionModel TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN audioDirectEngineKind TEXT NOT NULL DEFAULT 'BUILT_IN'")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN groqPostProcessingModel TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterPostProcessingModel TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterAudioDirectModel TEXT NOT NULL DEFAULT ''")
+                db.execSQL("UPDATE pipeline_config SET groqPostProcessingModel = postProcessingModel WHERE postProcessingProvider = 'GROQ'")
+                db.execSQL("UPDATE pipeline_config SET openRouterPostProcessingModel = postProcessingModel WHERE postProcessingProvider = 'OPENROUTER'")
             }
         }
     }
