@@ -63,11 +63,12 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -81,7 +82,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -580,9 +584,27 @@ private fun SetupScreen(
             SectionTitle("API keys")
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ProviderKeyField("Mistral API key", mistralKey) { onProviderKeyChange(ProviderId.MISTRAL, it) }
-                    ProviderKeyField("Groq API key", groqKey) { onProviderKeyChange(ProviderId.GROQ, it) }
-                    ProviderKeyField("OpenRouter API key", openRouterKey) { onProviderKeyChange(ProviderId.OPENROUTER, it) }
+                    ProviderKeyField(
+                        label = "Mistral API key",
+                        value = mistralKey,
+                        linkLabel = "Open Mistral API keys",
+                        linkUrl = "https://console.mistral.ai/api-keys/",
+                        onChange = { onProviderKeyChange(ProviderId.MISTRAL, it) }
+                    )
+                    ProviderKeyField(
+                        label = "Groq API key",
+                        value = groqKey,
+                        linkLabel = "Open Groq API keys",
+                        linkUrl = "https://console.groq.com/keys",
+                        onChange = { onProviderKeyChange(ProviderId.GROQ, it) }
+                    )
+                    ProviderKeyField(
+                        label = "OpenRouter API key",
+                        value = openRouterKey,
+                        linkLabel = "Open OpenRouter API keys",
+                        linkUrl = "https://openrouter.ai/settings/keys",
+                        onChange = { onProviderKeyChange(ProviderId.OPENROUTER, it) }
+                    )
                     Text(
                         "Keys are stored only on this device using Android Keystore-backed encryption. Recording is blocked only when the selected pipeline is missing a required key.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -659,15 +681,34 @@ private fun SettingHeader(title: String, value: String) {
 }
 
 @Composable
-private fun ProviderKeyField(label: String, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text(label) },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation()
-    )
+private fun ProviderKeyField(
+    label: String,
+    value: String,
+    linkLabel: String,
+    linkUrl: String,
+    onChange: (String) -> Unit
+) {
+    val context = LocalContext.current
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(label) },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation()
+        )
+        TextButton(
+            onClick = {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(linkUrl)))
+            },
+            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+        ) {
+            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(linkLabel)
+        }
+    }
 }
 
 @Composable
@@ -692,6 +733,7 @@ private fun ModelsScreen(
     var route by remember { mutableStateOf<ModelsRoute>(ModelsRoute.Main) }
     var favoritesVersion by remember { mutableIntStateOf(0) }
     var showPreview by remember { mutableStateOf(false) }
+    val mainListState = rememberLazyListState()
     val audioFavoriteIds = remember(openRouterAudioModels, favoritesVersion) { repository.getOpenRouterAudioFavoriteIds() }
     val groqPostFavoriteIds = remember(groqModels, favoritesVersion) { repository.getPostProcessingFavoriteIds(PostProcessingProvider.GROQ) }
     val openRouterPostFavoriteIds = remember(openRouterModels, favoritesVersion) { repository.getPostProcessingFavoriteIds(PostProcessingProvider.OPENROUTER) }
@@ -706,6 +748,9 @@ private fun ModelsScreen(
             openRouterAudioModels = openRouterAudioModels,
             openRouterAudioFavoriteIds = audioFavoriteIds,
             modelStatus = modelStatus,
+            hasGroqKey = hasGroqKey,
+            hasOpenRouterKey = hasOpenRouterKey,
+            listState = mainListState,
             onConfigChange = onConfigChange,
             onLanguageHintsChange = onLanguageHintsChange,
             onPreserveSpokenLanguageChange = onPreserveSpokenLanguageChange,
@@ -744,7 +789,8 @@ private fun ModelsScreen(
             onToggleFavorite = { provider, modelId ->
                 repository.togglePostProcessingFavorite(provider, modelId)
                 refreshFavorites()
-            }
+            },
+            onSelected = { route = ModelsRoute.Main }
         )
     }
 
@@ -762,6 +808,9 @@ private fun ModelsMainScreen(
     openRouterAudioModels: List<ModelOption>,
     openRouterAudioFavoriteIds: List<String>,
     modelStatus: String?,
+    hasGroqKey: Boolean,
+    hasOpenRouterKey: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     onConfigChange: (PipelineConfig) -> Unit,
     onLanguageHintsChange: (String) -> Unit,
     onPreserveSpokenLanguageChange: (Boolean) -> Unit,
@@ -774,7 +823,7 @@ private fun ModelsMainScreen(
     }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle("Models")
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(14.dp)) {
             item {
                 SettingsCard {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -858,18 +907,14 @@ private fun ModelsMainScreen(
             if (config.mode == PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING) {
                 item {
                     SettingsCard {
-                        Text("Post-processing provider", fontWeight = FontWeight.SemiBold)
-                        ChoiceRow(
-                            options = listOf(PostProcessingProvider.GROQ.label, PostProcessingProvider.OPENROUTER.label),
-                            selected = config.postProcessingProvider.label.takeIf { config.postProcessingProvider != PostProcessingProvider.NONE }.orEmpty()
-                        ) { label ->
-                            val provider = PostProcessingProvider.entries.first { it.label == label }
-                            onConfigChange(config.copy(postProcessingProvider = provider))
+                        Text("Post-Processing Model", fontWeight = FontWeight.SemiBold)
+                        Text(postProcessingModelSummary(config), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        postProcessingMissingKeySummary(config, hasGroqKey, hasOpenRouterKey)?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
                         }
-                        Text("Selected: ${config.postProcessingModel.ifBlank { "(select model)" }}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         OutlinedButton(
                             onClick = onManagePostProcessing,
-                            enabled = config.postProcessingProvider != PostProcessingProvider.NONE
+                            modifier = Modifier.fillMaxWidth()
                         ) { Text("Choose model") }
                         modelStatus?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
@@ -898,13 +943,6 @@ private enum class OpenRouterAudioSlot(val title: String) {
     TRANSCRIPTION("Choose transcription model"),
     AUDIO_DIRECT("Choose audio direct model")
 }
-
-private data class ModelDisplayRow(
-    val id: String,
-    val name: String,
-    val provider: String,
-    val isAvailable: Boolean
-)
 
 @Composable
 private fun OpenRouterAudioPickerScreen(
@@ -1000,44 +1038,39 @@ private fun PostProcessingPickerScreen(
     onConfigChange: (PipelineConfig) -> Unit,
     onRefreshGroq: () -> Unit,
     onRefreshOpenRouter: () -> Unit,
-    onToggleFavorite: (PostProcessingProvider, String) -> Unit
+    onToggleFavorite: (PostProcessingProvider, String) -> Unit,
+    onSelected: () -> Unit
 ) {
     BackHandler { onBack() }
-    var query by remember { mutableStateOf("") }
-    val activeProvider = if (config.postProcessingProvider == PostProcessingProvider.NONE) PostProcessingProvider.GROQ else config.postProcessingProvider
+    var pickerState by remember { mutableStateOf(initialPostProcessingPickerState(config)) }
+    val activeProvider = pickerState.activeProvider
     val models = if (activeProvider == PostProcessingProvider.GROQ) groqModels else openRouterModels
     val favoriteIds = if (activeProvider == PostProcessingProvider.GROQ) groqFavoriteIds else openRouterFavoriteIds
-    val selectedModel = when (activeProvider) {
-        PostProcessingProvider.GROQ -> config.groqPostProcessingModel
-        PostProcessingProvider.OPENROUTER -> config.openRouterPostProcessingModel
-        PostProcessingProvider.NONE -> ""
-    }
+    val selectedModel = selectedPostProcessingModel(config, activeProvider)
     val hasKey = if (activeProvider == PostProcessingProvider.GROQ) hasGroqKey else hasOpenRouterKey
-    val rows = remember(models, favoriteIds, selectedModel, query, activeProvider) { modelRows(models, favoriteIds, selectedModel, query, fallbackProvider = activeProvider.label) }
+    val rows = remember(models, favoriteIds, selectedModel, pickerState.query, activeProvider) {
+        modelRows(models, favoriteIds, selectedModel, pickerState.query, fallbackProvider = activeProvider.label)
+    }
     LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { ScreenHeader("Choose post-processing model", onBack) }
         item {
             SettingsCard {
-                Text("Provider", fontWeight = FontWeight.SemiBold)
+                Text("Provider Groups", fontWeight = FontWeight.SemiBold)
                 ChoiceRow(
                     options = listOf(PostProcessingProvider.GROQ.label, PostProcessingProvider.OPENROUTER.label),
                     selected = activeProvider.label
                 ) { label ->
-                    val provider = PostProcessingProvider.entries.first { it.label == label }
-                    onConfigChange(config.copy(postProcessingProvider = provider))
-                    query = ""
+                    pickerState = pickerState.switchProvider(PostProcessingProvider.entries.first { it.label == label })
                 }
-                Text("Current selected", fontWeight = FontWeight.SemiBold)
-                Text(selectedModel.ifBlank { "No ${activeProvider.label} model selected" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (selectedModel.isNotBlank() && rows.firstOrNull { it.id == selectedModel }?.isAvailable == false) {
-                    Text("Unavailable in latest refresh", color = MaterialTheme.colorScheme.error)
+                if (!hasKey) {
+                    Text("Missing ${activeProvider.label} API key", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
         item {
             OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
+                value = pickerState.query,
+                onValueChange = { pickerState = pickerState.copy(query = it) },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Search models") },
                 singleLine = true
@@ -1063,9 +1096,13 @@ private fun PostProcessingPickerScreen(
         items(rows, key = { it.id }) { row ->
             ModelPickerRow(
                 row = row,
-                selected = row.id == selectedModel,
+                selected = isActivePostProcessingModel(config, activeProvider, row.id),
+                savedForProvider = isSavedPostProcessingModel(config, activeProvider, row.id),
                 favorite = row.id in favoriteIds,
-                onClick = { onConfigChange(config.copy(postProcessingProvider = activeProvider).withPostProcessingModel(row.id)) },
+                onClick = {
+                    onConfigChange(pickerState.selectModel(config, row.id))
+                    onSelected()
+                },
                 onToggleFavorite = { onToggleFavorite(activeProvider, row.id) }
             )
         }
@@ -1076,20 +1113,44 @@ private fun PostProcessingPickerScreen(
 private fun ModelPickerRow(
     row: ModelDisplayRow,
     selected: Boolean,
+    savedForProvider: Boolean = false,
     favorite: Boolean,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
     val container = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
     val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+    val outlineColor = MaterialTheme.colorScheme.primary
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (savedForProvider) {
+                    Modifier.drawWithContent {
+                        drawContent()
+                        val strokeWidth = 1.5.dp.toPx()
+                        drawRoundRect(
+                            color = outlineColor,
+                            style = Stroke(
+                                width = strokeWidth,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
+                            )
+                        )
+                    }
+                } else {
+                    Modifier
+                }
+            )
+            .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = container)
     ) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(row.name, fontWeight = FontWeight.SemiBold, color = contentColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(modelRowSubtitle(row), color = if (selected) contentColor else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (savedForProvider) {
+                    Text("Last selected for ${row.provider}; not active", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             IconButton(onClick = onToggleFavorite) {
                 Icon(
@@ -1099,34 +1160,6 @@ private fun ModelPickerRow(
                 )
             }
         }
-    }
-}
-
-private fun modelRows(
-    models: List<ModelOption>,
-    favoriteIds: List<String>,
-    selectedId: String?,
-    query: String,
-    favoritesOnly: Boolean = false,
-    fallbackProvider: String = "OpenRouter"
-): List<ModelDisplayRow> {
-    val cachedById = models.associateBy { it.id }
-    val orderedIds = mutableListOf<String>()
-    favoriteIds.forEach { if (it !in orderedIds) orderedIds += it }
-    selectedId?.takeIf { it.isNotBlank() && it !in orderedIds && !favoritesOnly }?.let { orderedIds += it }
-    if (!favoritesOnly) {
-        models.map { it.id }.forEach { if (it !in orderedIds) orderedIds += it }
-    }
-    val cleanQuery = query.trim()
-    return orderedIds.mapNotNull { id ->
-        val model = cachedById[id]
-        val row = ModelDisplayRow(
-            id = id,
-            name = model?.name ?: id,
-            provider = model?.provider?.takeIf { it.isNotBlank() } ?: fallbackProvider,
-            isAvailable = model != null
-        )
-        row.takeIf { cleanQuery.isBlank() || it.id.contains(cleanQuery, true) || it.name.contains(cleanQuery, true) }
     }
 }
 
@@ -1274,6 +1307,26 @@ private fun activePipelineText(config: PipelineConfig): String {
             "Active: ${config.transcriptionDisplayName()} (${config.transcriptionModel()}) -> ${config.postProcessingProvider.label} ${config.postProcessingModel.ifBlank { "(select model)" }}. Style is resolved from the Style tab at recording start."
         PipelineMode.AUDIO_DIRECT ->
             "Active: ${config.audioDirectDisplayName()} (${config.audioDirectModel()}) with the recording-start style prompt in one call."
+    }
+}
+
+private fun postProcessingModelSummary(config: PipelineConfig): String {
+    if (config.postProcessingProvider == PostProcessingProvider.NONE || config.postProcessingModel.isBlank()) {
+        return "No Post-Processing Model selected"
+    }
+    return "${config.postProcessingProvider.label} · ${config.postProcessingModel}"
+}
+
+private fun postProcessingMissingKeySummary(
+    config: PipelineConfig,
+    hasGroqKey: Boolean,
+    hasOpenRouterKey: Boolean
+): String? {
+    if (config.postProcessingModel.isBlank()) return null
+    return when (config.postProcessingProvider) {
+        PostProcessingProvider.GROQ -> if (hasGroqKey) null else "Missing Groq API key for the selected post-processing model."
+        PostProcessingProvider.OPENROUTER -> if (hasOpenRouterKey) null else "Missing OpenRouter API key for the selected post-processing model."
+        PostProcessingProvider.NONE -> null
     }
 }
 
