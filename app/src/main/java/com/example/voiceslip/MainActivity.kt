@@ -120,7 +120,6 @@ import com.example.voiceslip.net.OpenRouterClient
 import com.example.voiceslip.net.PipelineException
 import com.example.voiceslip.net.PipelineExecutor
 import com.example.voiceslip.net.PipelineResult
-import com.example.voiceslip.net.buildAudioLanguageBlock
 import com.example.voiceslip.net.buildAudioDirectPrompt
 import com.example.voiceslip.net.buildAudioTranscriptionPromptPreview
 import com.example.voiceslip.net.buildLanguageHintExamples
@@ -1280,12 +1279,6 @@ private fun activePipelineText(config: PipelineConfig): String {
 
 private const val DETECTED_LANGUAGE_PLACEHOLDER = "{{detected_language}}"
 
-private fun audioLanguagePreview(languageHints: String, preserveSpokenLanguage: Boolean): String =
-    buildAudioLanguageBlock(languageHints, preserveSpokenLanguage) ?: "Language: (omitted)"
-
-private fun postProcessingLanguagePreview(preserveSpokenLanguage: Boolean): String =
-    buildPostProcessingLanguageBlock(DETECTED_LANGUAGE_PLACEHOLDER, preserveSpokenLanguage) ?: "Language: (omitted)"
-
 private fun audioChatTranscriptionPromptPreview(languageHints: String, preserveSpokenLanguage: Boolean, dictionaryPrompt: String?): String =
     buildAudioTranscriptionPromptPreview(languageHints, preserveSpokenLanguage, dictionaryPrompt)
 
@@ -1427,9 +1420,6 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         if (config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) {
                             Text("Audio input: base64 input_audio")
                         }
-                        if (transcriptionUsesAudioPrompt) {
-                            Text(audioLanguagePreview(languageHints, preserveSpokenLanguage))
-                        }
                         transcriptionPlan?.let {
                             Text("Dictionary: ${it.mechanism}")
                             it.limit?.let { limit -> Text("Prompt limit: $limit chars") }
@@ -1448,7 +1438,6 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Provider: ${config.postProcessingProvider.label}")
                         Text("Model: ${config.postProcessingModel.ifBlank { "(select model)" }}")
                         Text("Dictionary: ${dictionary.size} of ${dictionary.size} terms included as spelling constraints")
-                        Text(postProcessingLanguagePreview(preserveSpokenLanguage))
                         Text("Resolved style: {{style_prompt}}")
                         Text("System prompt:\n${postProcessingSystemPromptPreview(cleanupPolicy, preserveSpokenLanguage, dictionary.size)}")
                         Text("User prompt:\nApply this formatting style:\n${resolution.stylePrompt}\n\nRaw transcript:\n{{raw_transcript}}")
@@ -1467,7 +1456,6 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                             Text("Audio input: base64 input_audio")
                         }
                         Text("Dictionary: full dictionary included in prompt")
-                        Text(audioLanguagePreview(languageHints, preserveSpokenLanguage))
                         Text("Resolved style: {{style_prompt}}")
                         Text("Prompt:\n${audioDirectPromptPreview(cleanupPolicy, resolution.stylePrompt, languageHints, preserveSpokenLanguage, dictionary.size)}")
                     }
