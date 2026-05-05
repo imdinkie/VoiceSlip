@@ -1,6 +1,6 @@
 *.iml
 .gradle
-/AGENTS.md
+/AGENTS.local.md
 /local.properties
 /.idea/
 /.idea/caches
