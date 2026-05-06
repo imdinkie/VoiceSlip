@@ -124,7 +124,7 @@ import com.example.voiceslip.net.PipelineResult
 import com.example.voiceslip.net.buildAudioDirectPrompt
 import com.example.voiceslip.net.buildAudioTranscriptionPromptPreview
 import com.example.voiceslip.net.buildLanguageHintExamples
-import com.example.voiceslip.net.buildPostProcessingLanguageBlock
+import com.example.voiceslip.net.buildPostProcessingSystemPrompt
 import com.example.voiceslip.net.outputGuardRejection
 import com.example.voiceslip.service.VoiceSlipAccessibilityService
 import com.example.voiceslip.ui.theme.VoiceSlipTheme
@@ -822,46 +822,6 @@ private fun ModelsMainScreen(
         LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(14.dp)) {
             item {
                 SettingsCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Pipeline preview", fontWeight = FontWeight.SemiBold)
-                            Text("Shows providers, prompts, dictionary routing, and insertion fallback.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        OutlinedButton(onClick = onPreview) { Text("Preview") }
-                    }
-                }
-            }
-            item {
-                SettingsCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Preserve spoken language", fontWeight = FontWeight.SemiBold)
-                            Text("Keeps output in the language you dictated.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        SettingsSwitch(
-                            checked = preserveSpokenLanguage,
-                            onCheckedChange = onPreserveSpokenLanguageChange
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text("Language hints", fontWeight = FontWeight.SemiBold)
-                    OutlinedTextField(
-                        value = languageHints,
-                        onValueChange = onLanguageHintsChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Comma-separated languages") },
-                        singleLine = true,
-                        enabled = preserveSpokenLanguage
-                    )
-                    if (preserveSpokenLanguage) {
-                        val helperText = buildLanguageHintExamples(languageHints)
-                            .ifBlank { "Prompts preserve the spoken language and do not translate." }
-                        Text(helperText, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-            item {
-                SettingsCard {
                     Text("Pipeline mode", fontWeight = FontWeight.SemiBold)
                     ChoiceColumn(PipelineMode.entries.map { it.label }, config.mode.label) { label ->
                         val mode = PipelineMode.entries.first { it.label == label }
@@ -908,7 +868,9 @@ private fun ModelsMainScreen(
             }
             if (config.mode == PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING) {
                 item {
-                    SettingsCard {
+                    SettingsCard(
+                        modifier = Modifier.clickable { onManagePostProcessing() }
+                    ) {
                         Text("Post-Processing Model", fontWeight = FontWeight.SemiBold)
                         Text(postProcessingModelSummary(config), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         postProcessingMissingKeySummary(config, hasGroqKey, hasOpenRouterKey)?.let {
@@ -923,13 +885,29 @@ private fun ModelsMainScreen(
                 }
             }
             item {
-                DictionaryRoutingCard(repository = repository, config = config)
+                DictionaryDuringTranscriptionCard(repository = repository, config = config)
             }
             item {
-                Text(
-                    activePipelineText(config),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                LanguagePreservationCard(
+                    languageHints = languageHints,
+                    preserveSpokenLanguage = preserveSpokenLanguage,
+                    onLanguageHintsChange = onLanguageHintsChange,
+                    onPreserveSpokenLanguageChange = onPreserveSpokenLanguageChange
                 )
+            }
+            item {
+                ActivePipelineCard(config)
+            }
+            item {
+                SettingsCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Pipeline Preview", fontWeight = FontWeight.SemiBold)
+                            Text("Shows providers, exact prompts, dictionary behavior, and insertion fallback.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        OutlinedButton(onClick = onPreview) { Text("Open") }
+                    }
+                }
             }
         }
     }
@@ -1208,17 +1186,6 @@ private fun ChoiceColumn(options: List<String>, selected: String, onSelect: (Str
     }
 }
 
-private fun activePipelineText(config: PipelineConfig): String {
-    return when (config.mode) {
-        PipelineMode.PURE_TRANSCRIPTION ->
-            "Active: ${config.transcriptionDisplayName()} (${config.transcriptionModel()}). Final text is the raw transcript."
-        PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING ->
-            "Active: ${config.transcriptionDisplayName()} (${config.transcriptionModel()}) -> ${config.postProcessingProvider.label} ${config.postProcessingModel.ifBlank { "(select model)" }}. Style is resolved from the Style tab at recording start."
-        PipelineMode.AUDIO_DIRECT ->
-            "Active: ${config.audioDirectDisplayName()} (${config.audioDirectModel()}) with the recording-start style prompt in one call."
-    }
-}
-
 private fun transcriptionModelSummary(config: PipelineConfig): String =
     "${config.transcriptionProvider().label} · ${config.transcriptionModel()} · ${config.transcriptionDisplayName()}"
 
@@ -1278,22 +1245,12 @@ private fun audioChatTranscriptionPromptPreview(languageHints: String, preserveS
     buildAudioTranscriptionPromptPreview(languageHints, preserveSpokenLanguage, dictionaryPrompt)
 
 private fun postProcessingSystemPromptPreview(cleanupPolicy: String, preserveSpokenLanguage: Boolean, dictionarySize: Int): String =
-    buildString {
-        appendLine("Clean this raw transcript and return the final insertable text.")
-        appendLine()
-        buildPostProcessingLanguageBlock(DETECTED_LANGUAGE_PLACEHOLDER, preserveSpokenLanguage)?.let {
-            appendLine(it)
-            appendLine()
-        }
-        appendLine("Follow these global cleanup rules:")
-        appendLine(cleanupPolicy)
-        if (dictionarySize > 0) {
-            appendLine()
-            appendLine("Dictionary spelling constraints: {{dictionary_terms}}.")
-        }
-        appendLine()
-        append("Return only JSON with key final_text.")
-    }
+    buildPostProcessingSystemPrompt(
+        detectedLanguage = DETECTED_LANGUAGE_PLACEHOLDER,
+        dictionaryTerms = if (dictionarySize > 0) listOf("{{dictionary_terms}}") else emptyList(),
+        cleanupPolicy = cleanupPolicy,
+        preserveSpokenLanguage = preserveSpokenLanguage
+    )
 
 private fun audioDirectPromptPreview(
     cleanupPolicy: String,
@@ -1337,7 +1294,75 @@ private fun pipelineModeExplanation(mode: PipelineMode): String {
 }
 
 @Composable
-private fun DictionaryRoutingCard(repository: VoiceSlipRepository, config: PipelineConfig) {
+private fun LanguagePreservationCard(
+    languageHints: String,
+    preserveSpokenLanguage: Boolean,
+    onLanguageHintsChange: (String) -> Unit,
+    onPreserveSpokenLanguageChange: (Boolean) -> Unit
+) {
+    SettingsCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Language Preservation", fontWeight = FontWeight.SemiBold)
+                Text("Keeps output in the language you dictated.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            SettingsSwitch(
+                checked = preserveSpokenLanguage,
+                onCheckedChange = onPreserveSpokenLanguageChange
+            )
+        }
+        Text("Language Hints", fontWeight = FontWeight.SemiBold)
+        OutlinedTextField(
+            value = languageHints,
+            onValueChange = onLanguageHintsChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Comma-separated languages") },
+            singleLine = true,
+            enabled = preserveSpokenLanguage
+        )
+        if (preserveSpokenLanguage) {
+            val helperText = buildLanguageHintExamples(languageHints)
+                .ifBlank { "Optional. Add hints only when your dictation languages need extra guidance." }
+            Text(helperText, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun ActivePipelineCard(config: PipelineConfig) {
+    SettingsCard {
+        Text("Active Pipeline", fontWeight = FontWeight.SemiBold)
+        when (config.mode) {
+            PipelineMode.PURE_TRANSCRIPTION -> {
+                PipelineDetailRow("Mode", config.mode.label)
+                PipelineDetailRow("Transcription", "${config.transcriptionProvider().label} · ${config.transcriptionModel()}")
+                PipelineDetailRow("Output", "Raw transcript")
+            }
+            PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING -> {
+                PipelineDetailRow("Mode", config.mode.label)
+                PipelineDetailRow("Transcription", "${config.transcriptionProvider().label} · ${config.transcriptionModel()}")
+                PipelineDetailRow("Cleanup", "${config.postProcessingProvider.label} · ${config.postProcessingModel.ifBlank { "(select model)" }}")
+                PipelineDetailRow("Style", "Resolved at recording start")
+            }
+            PipelineMode.AUDIO_DIRECT -> {
+                PipelineDetailRow("Mode", config.mode.label)
+                PipelineDetailRow("Audio direct", "${config.audioDirectProvider().label} · ${config.audioDirectModel()}")
+                PipelineDetailRow("Style", "Sent with audio in one call")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PipelineDetailRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(label, modifier = Modifier.width(112.dp), fontWeight = FontWeight.SemiBold)
+        Text(value, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun DictionaryDuringTranscriptionCard(repository: VoiceSlipRepository, config: PipelineConfig) {
     val entries = repository.listDictionary()
     val routingId = if (config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID else config.transcriptionEngine.name
     val engineName = if (config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) "OpenRouter audio" else config.transcriptionEngine.displayName
@@ -1346,18 +1371,19 @@ private fun DictionaryRoutingCard(repository: VoiceSlipRepository, config: Pipel
         if (config.mode == PipelineMode.AUDIO_DIRECT) null else repository.dictionaryPlanForTranscription(config, entries.map { it.phrase })
     }
     SettingsCard {
-        Text("Dictionary routing", fontWeight = FontWeight.SemiBold)
+        Text("Dictionary During Transcription", fontWeight = FontWeight.SemiBold)
         if (config.mode == PipelineMode.AUDIO_DIRECT) {
-            Text("Audio direct: full dictionary is sent as spelling constraints in the audio prompt.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "Audio direct always sends all ${entries.size} Dictionary Entries as prompt spelling constraints. There is no separate switch.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         } else {
             val routingEnabled = routing.sendDictionaryToTranscription
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(engineName)
                     if (routingEnabled) {
-                        plan?.mechanism
-                            ?.takeUnless { it.isBlank() || it == "Off" }
-                            ?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        plan?.let { Text(dictionaryDuringTranscriptionDetail(it), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                 }
                 SettingsSwitch(
@@ -1369,15 +1395,28 @@ private fun DictionaryRoutingCard(repository: VoiceSlipRepository, config: Pipel
                 )
             }
             if (routingEnabled && entries.isEmpty()) {
-                Text("No dictionary terms saved yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (routingEnabled && plan != null && plan.includedTerms > 0) {
-                val termsText = "Terms included: ${plan.includedTerms} of ${plan.totalTerms}."
-                val detail = plan.limit?.let { "Prompt limit: $it. $termsText" } ?: termsText
-                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("No Dictionary Entries saved yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Text("Full dictionary is always used during cleanup.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Cleanup always receives all ${entries.size} Dictionary Entries.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+internal fun dictionaryDuringTranscriptionDetail(plan: com.example.voiceslip.data.DictionaryPromptPlan): String {
+    if (!plan.sent) return "Off. Cleanup still receives all ${plan.totalTerms} Dictionary Entries."
+    return when (plan.mechanism) {
+        "Mistral context_bias" -> {
+            val base = "Sends ${plan.includedTerms} Mistral Bias Tokens derived from ${plan.totalTerms} Dictionary Entries."
+            if (plan.truncated && plan.limit != null) "$base Provider limit: ${plan.limit} Bias Tokens." else base
+        }
+        "Groq multipart prompt" -> {
+            val base = "Sends ${plan.includedTerms} of ${plan.totalTerms} Dictionary Entries through the Groq transcription prompt field."
+            if (plan.truncated && plan.limit != null) "$base Prompt budget: ${plan.limit} characters." else base
+        }
+        "OpenRouter audio prompt spelling constraints" ->
+            "Sends all ${plan.includedTerms} Dictionary Entries through the OpenRouter audio prompt."
+        else ->
+            "Sends all ${plan.includedTerms} Dictionary Entries as prompt spelling constraints."
     }
 }
 
@@ -1417,12 +1456,11 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         }
                         transcriptionPlan?.let {
                             Text("Dictionary: ${it.mechanism}")
-                            it.limit?.let { limit -> Text("Prompt limit: $limit chars") }
-                            Text("Terms included: ${it.includedTerms} of ${it.totalTerms}")
+                            Text(dictionaryDuringTranscriptionDetail(it))
                             if (transcriptionUsesAudioPrompt) {
-                                Text("Prompt sent:\n${audioChatTranscriptionPromptPreview(languageHints, preserveSpokenLanguage, it.prompt)}")
+                                Text("Prompt:\n${audioChatTranscriptionPromptPreview(languageHints, preserveSpokenLanguage, it.prompt)}")
                             } else {
-                                it.prompt?.let { prompt -> Text("Prompt sent:\n$prompt") }
+                                it.prompt?.let { prompt -> Text("Prompt:\n$prompt") }
                             }
                         }
                     }
@@ -1432,7 +1470,7 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Step 2: Post-processing", fontWeight = FontWeight.SemiBold)
                         Text("Provider: ${config.postProcessingProvider.label}")
                         Text("Model: ${config.postProcessingModel.ifBlank { "(select model)" }}")
-                        Text("Dictionary: ${dictionary.size} of ${dictionary.size} terms included as spelling constraints")
+                        Text("Dictionary: cleanup receives all ${dictionary.size} Dictionary Entries as spelling constraints")
                         Text("Resolved style: {{style_prompt}}")
                         Text("System prompt:\n${postProcessingSystemPromptPreview(cleanupPolicy, preserveSpokenLanguage, dictionary.size)}")
                         Text("User prompt:\nApply this formatting style:\n${resolution.stylePrompt}\n\nRaw transcript:\n{{raw_transcript}}")
@@ -1450,7 +1488,7 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         if (audioDirectProvider == ProviderId.OPENROUTER) {
                             Text("Audio input: base64 input_audio")
                         }
-                        Text("Dictionary: full dictionary included in prompt")
+                        Text("Dictionary: all ${dictionary.size} Dictionary Entries included as prompt spelling constraints")
                         Text("Resolved style: {{style_prompt}}")
                         Text("Prompt:\n${audioDirectPromptPreview(cleanupPolicy, resolution.stylePrompt, languageHints, preserveSpokenLanguage, dictionary.size)}")
                     }
@@ -2407,7 +2445,7 @@ private fun DictionaryWarning(repository: VoiceSlipRepository, config: PipelineC
     if (!plan.truncated) return
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer), shape = RoundedCornerShape(8.dp)) {
         Text(
-            "Current pipeline uses ${config.transcriptionDisplayName()}. Only the first ${plan.includedTerms} of ${plan.totalTerms} terms fit in the transcription prompt. The full dictionary is still used during cleanup.",
+            "Current pipeline uses ${config.transcriptionDisplayName()}. ${dictionaryDuringTranscriptionDetail(plan)} Cleanup still receives all ${plan.totalTerms} Dictionary Entries.",
             modifier = Modifier.padding(14.dp),
             color = MaterialTheme.colorScheme.onErrorContainer
         )

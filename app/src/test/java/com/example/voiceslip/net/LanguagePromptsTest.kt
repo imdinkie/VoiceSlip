@@ -1,7 +1,9 @@
 package com.example.voiceslip.net
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LanguagePromptsTest {
@@ -54,5 +56,21 @@ class LanguagePromptsTest {
     @Test
     fun postProcessingLanguageBlockIsOmittedWhenPreservationIsOff() {
         assertNull(buildPostProcessingLanguageBlock("de", preserveSpokenLanguage = false))
+    }
+
+    @Test
+    fun postProcessingRequestIncludesAllDictionaryEntriesForCleanup() {
+        val terms = (1..125).map { "Entry$it" }
+
+        val systemPrompt = buildPostProcessingSystemPrompt(
+            detectedLanguage = null,
+            dictionaryTerms = terms,
+            cleanupPolicy = "cleanup",
+            preserveSpokenLanguage = false
+        )
+
+        assertTrue(systemPrompt.contains("Entry1"))
+        assertTrue(systemPrompt.contains("Entry125"))
+        assertFalse(systemPrompt.contains("Entry126"))
     }
 }

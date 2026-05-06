@@ -32,7 +32,7 @@ class GroqClient {
                 out.writeFormField(
                     boundary,
                     "prompt",
-                    "Prefer these spellings when they match the audio: ${dictionaryTerms.take(100).joinToString(", ")}"
+                    "Prefer these spellings when they match the audio: ${dictionaryTerms.joinToString(", ")}"
                 )
             }
             out.writeFileField(boundary, "file", audioFile.name, audioMimeType(audioFile), audioFile)
@@ -116,23 +116,7 @@ internal fun postProcessingRequest(
     cleanupPolicy: String,
     preserveSpokenLanguage: Boolean
 ): JSONObject {
-    val system = buildString {
-        appendLine("Clean this raw transcript and return the final insertable text.")
-        appendLine()
-        buildPostProcessingLanguageBlock(detectedLanguage, preserveSpokenLanguage)?.let {
-            appendLine(it)
-            appendLine()
-        }
-        appendLine("Follow these global cleanup rules:")
-        append(cleanupPolicy)
-        appendLine()
-        appendLine()
-        if (dictionaryTerms.isNotEmpty()) {
-            appendLine("Dictionary spelling constraints: ${dictionaryTerms.take(100).joinToString(", ")}.")
-            appendLine()
-        }
-        append("Return only JSON with key final_text.")
-    }
+    val system = buildPostProcessingSystemPrompt(detectedLanguage, dictionaryTerms, cleanupPolicy, preserveSpokenLanguage)
     val user = "Apply this formatting style:\n$stylePrompt\n\nRaw transcript:\n$rawTranscript"
     return JSONObject()
         .put("model", model)
@@ -142,6 +126,29 @@ internal fun postProcessingRequest(
             .put(JSONObject().put("role", "user").put("content", user))
         )
         .put("response_format", JSONObject().put("type", "json_object"))
+}
+
+internal fun buildPostProcessingSystemPrompt(
+    detectedLanguage: String?,
+    dictionaryTerms: List<String>,
+    cleanupPolicy: String,
+    preserveSpokenLanguage: Boolean
+): String = buildString {
+    appendLine("Clean this raw transcript and return the final insertable text.")
+    appendLine()
+    buildPostProcessingLanguageBlock(detectedLanguage, preserveSpokenLanguage)?.let {
+        appendLine(it)
+        appendLine()
+    }
+    appendLine("Follow these global cleanup rules:")
+    append(cleanupPolicy)
+    appendLine()
+    appendLine()
+    if (dictionaryTerms.isNotEmpty()) {
+        appendLine("Dictionary spelling constraints: ${dictionaryTerms.joinToString(", ")}.")
+        appendLine()
+    }
+    append("Return only JSON with key final_text.")
 }
 
 internal fun parsePostProcessing(json: JSONObject, fallbackModel: String): PostProcessingResult {

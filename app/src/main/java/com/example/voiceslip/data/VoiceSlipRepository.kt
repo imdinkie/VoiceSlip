@@ -67,10 +67,12 @@ class VoiceSlipRepository(context: Context) {
         prefs.edit().putString("language_hints", hints.trim()).apply()
     }
 
-    fun getPreserveSpokenLanguage(): Boolean = prefs.getBoolean("preserve_spoken_language", true)
+    fun getPreserveSpokenLanguage(): Boolean = resolvePreserveSpokenLanguagePreference(
+        if (prefs.contains(KEY_PRESERVE_SPOKEN_LANGUAGE)) prefs.getBoolean(KEY_PRESERVE_SPOKEN_LANGUAGE, true) else null
+    )
 
     fun setPreserveSpokenLanguage(enabled: Boolean) {
-        prefs.edit().putBoolean("preserve_spoken_language", enabled).apply()
+        prefs.edit().putBoolean(KEY_PRESERVE_SPOKEN_LANGUAGE, enabled).apply()
     }
 
     fun getCachedModels(provider: ProviderId): List<ModelOption> {
@@ -305,35 +307,16 @@ class VoiceSlipRepository(context: Context) {
         dao.upsertRouting(EngineDictionaryRoutingEntity(engineId, enabled))
     }
 
-    fun dictionaryPlanForTranscription(engine: TranscriptionEngineId, terms: List<String>): DictionaryPromptPlan {
-        val enabled = routingForEngine(engine.name).sendDictionaryToTranscription
-        if (!enabled || terms.isEmpty()) {
-            return DictionaryPromptPlan(false, "Off", null, 0, terms.size)
-        }
-        return when {
-            engine.provider == ProviderId.GROQ -> groqDictionaryPrompt(terms)
-            engine.provider == ProviderId.MISTRAL && engine.audioChat ->
-                DictionaryPromptPlan(true, "Prompt spelling constraints", "Use these spelling constraints when they match the audio: ${terms.take(100).joinToString(", ")}.", terms.take(100).size, terms.size, 100)
-            else -> {
-                val safeTerms = mistralContextBiasTerms(terms)
-                DictionaryPromptPlan(true, "Mistral context_bias", safeTerms.take(100).joinToString("\n"), safeTerms.take(100).size, terms.size, 100)
-            }
-        }
-    }
+    fun dictionaryPlanForTranscription(engine: TranscriptionEngineId, terms: List<String>): DictionaryPromptPlan =
+        dictionaryPlanForBuiltInTranscription(engine, terms, routingForEngine(engine.name).sendDictionaryToTranscription)
 
     fun dictionaryPlanForTranscription(config: PipelineConfig, terms: List<String>): DictionaryPromptPlan {
         if (config.transcriptionEngineKind == EngineKind.BUILT_IN) {
             return dictionaryPlanForTranscription(config.transcriptionEngine, terms)
         }
-        val enabled = routingForEngine(OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID).sendDictionaryToTranscription
-        if (!enabled || terms.isEmpty()) return DictionaryPromptPlan(false, "Off", null, 0, terms.size)
-        return DictionaryPromptPlan(
-            true,
-            "OpenRouter audio prompt spelling constraints",
-            "Use these spelling constraints when they match the audio: ${terms.take(100).joinToString(", ")}.",
-            terms.take(100).size,
-            terms.size,
-            100
+        return openRouterAudioDictionaryPlan(
+            terms,
+            routingForEngine(OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID).sendDictionaryToTranscription
         )
     }
 
@@ -520,6 +503,7 @@ private const val KEY_OPENROUTER_AUDIO_DEFAULTS_SEEDED_VERSION = "openrouter_aud
 private const val OPENROUTER_AUDIO_DEFAULTS_VERSION = 1
 private const val KEY_GROQ_POST_PROCESSING_FAVORITES = "groq_post_processing_favorite_model_ids"
 private const val KEY_OPENROUTER_POST_PROCESSING_FAVORITES = "openrouter_post_processing_favorite_model_ids"
+private const val KEY_PRESERVE_SPOKEN_LANGUAGE = "preserve_spoken_language"
 const val OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID = "OPENROUTER_AUDIO_TRANSCRIPTION"
 
 private fun Drawable.toBitmap(width: Int, height: Int): Bitmap {
@@ -542,6 +526,54 @@ private fun groqDictionaryPrompt(terms: List<String>): DictionaryPromptPlan {
     val prompt = if (included.isEmpty()) null else prefix + included.joinToString(", ")
     return DictionaryPromptPlan(true, "Groq multipart prompt", prompt, included.size, terms.size, GROQ_WHISPER_PROMPT_LIMIT)
 }
+
+internal fun resolvePreserveSpokenLanguagePreference(savedPreference: Boolean?): Boolean =
+    savedPreference ?: true
+
+internal fun dictionaryPlanForBuiltInTranscription(
+    engine: TranscriptionEngineId,
+    terms: List<String>,
+    enabled: Boolean
+): DictionaryPromptPlan {
+    if (!enabled || terms.isEmpty()) {
+        return DictionaryPromptPlan(false, "Off", null, 0, terms.size)
+    }
+    return when {
+        engine.provider == ProviderId.GROQ -> groqDictionaryPrompt(terms)
+        engine.provider == ProviderId.MISTRAL && engine.audioChat ->
+            promptSpellingConstraintsPlan("Prompt spelling constraints", terms)
+        else -> {
+            val safeTerms = mistralContextBiasTerms(terms)
+            val included = safeTerms.take(MISTRAL_CONTEXT_BIAS_TOKEN_LIMIT)
+            DictionaryPromptPlan(
+                sent = true,
+                mechanism = "Mistral context_bias",
+                prompt = included.joinToString("\n"),
+                includedTerms = included.size,
+                totalTerms = terms.size,
+                limit = MISTRAL_CONTEXT_BIAS_TOKEN_LIMIT
+            )
+        }
+    }
+}
+
+internal fun openRouterAudioDictionaryPlan(terms: List<String>, enabled: Boolean): DictionaryPromptPlan {
+    if (!enabled || terms.isEmpty()) {
+        return DictionaryPromptPlan(false, "Off", null, 0, terms.size)
+    }
+    return promptSpellingConstraintsPlan("OpenRouter audio prompt spelling constraints", terms)
+}
+
+private fun promptSpellingConstraintsPlan(mechanism: String, terms: List<String>): DictionaryPromptPlan =
+    DictionaryPromptPlan(
+        sent = true,
+        mechanism = mechanism,
+        prompt = "Use these spelling constraints when they match the audio: ${terms.joinToString(", ")}.",
+        includedTerms = terms.size,
+        totalTerms = terms.size
+    )
+
+private const val MISTRAL_CONTEXT_BIAS_TOKEN_LIMIT = 100
 
 private val seededPackages = mapOf(
     "com.whatsapp" to CATEGORY_PERSONAL,
