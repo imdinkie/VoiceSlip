@@ -142,10 +142,19 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 
     private fun activeApplicationPackage(): String? {
-        return windows.firstOrNull {
+        val focusedWindowPackage = windows.firstOrNull {
             it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isFocused
         }?.root?.packageName?.toString()
-            ?: rootInActiveWindow?.packageName?.toString()
+        val activeRootPackage = rootInActiveWindow?.packageName?.toString()
+        val editableNodePackage = findFocusedEditableNode()?.packageName?.toString()
+        val inputEditorPackage = accessibilityInputMethod?.targetPackageName()
+        return resolveTargetAppPackage(
+            focusedWindowPackage = focusedWindowPackage,
+            activeRootPackage = activeRootPackage,
+            editableNodePackage = editableNodePackage,
+            inputEditorPackage = inputEditorPackage,
+            ownPackage = packageName
+        )
     }
 
     private fun findFocusedEditableNode(): AccessibilityNodeInfo? {
@@ -213,20 +222,24 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val height = compactSize
         val savedX = repository.getBubbleX()
         val savedY = repository.getBubbleY()
-        val defaultPosition = clampBubblePosition(
-            resources.displayMetrics.widthPixels - compactSize - edgePaddingPx(),
-            resources.displayMetrics.heightPixels / 3,
-            compactSize,
-            compactSize
-        )
-        val compactPosition = if (savedX >= 0 && savedY >= 0) {
-            clampBubblePosition(savedX, savedY, compactSize, compactSize)
-        } else {
-            defaultPosition
+        val bounds = bubbleBounds(compactSize, compactSize)
+        val savedPlacement = savedBubblePlacement()
+        val defaultPosition = BubblePlacement(
+            edge = BubbleEdge.END,
+            verticalFraction = defaultBubbleVerticalFraction(bounds)
+        ).toPosition(bounds)
+        val compactPosition = when {
+            savedPlacement != null -> savedPlacement.toPosition(bounds)
+            savedX >= 0 && savedY >= 0 -> clampBubblePosition(savedX, savedY, compactSize, compactSize).let { BubblePosition(it.first, it.second) }
+            else -> defaultPosition
         }
-        compactAnchorX = compactPosition.first
-        compactAnchorY = compactPosition.second
-        val position = if (expanded) positionForExpandedOverlay(compactPosition.first, compactPosition.second, width, height) else compactPosition
+        compactAnchorX = compactPosition.x
+        compactAnchorY = compactPosition.y
+        val position = if (expanded) {
+            positionForExpandedOverlay(compactPosition.x, compactPosition.y, width, height)
+        } else {
+            compactPosition.x to compactPosition.y
+        }
         val params = WindowManager.LayoutParams(
             width,
             height,
@@ -238,7 +251,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             x = position.first
             y = position.second
         }
-        if (!expanded) repository.setBubblePosition(params.x, params.y)
+        if (!expanded) saveBubblePosition(params.x, params.y, compactSize, compactSize)
         overlayParams = params
         runCatching { windowManager.addView(view, params) }
     }
@@ -252,14 +265,17 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         view.setExpanded(expanded)
         val width = if (expanded) expandedWidthPx(compactSize) else compactSize
         val height = compactSize
+        val savedCompactPosition = savedBubblePlacement()?.toPosition(bubbleBounds(compactSize, compactSize))
         val position = if (expanded) {
-            val anchorX = compactAnchorX.takeIf { it >= 0 } ?: params.x
-            val anchorY = compactAnchorY.takeIf { it >= 0 } ?: params.y
+            val anchorX = savedCompactPosition?.x ?: compactAnchorX.takeIf { it >= 0 } ?: params.x
+            val anchorY = savedCompactPosition?.y ?: compactAnchorY.takeIf { it >= 0 } ?: params.y
             positionForExpandedOverlay(anchorX, anchorY, width, height)
         } else {
-            val anchorX = compactAnchorX.takeIf { it >= 0 } ?: params.x
-            val anchorY = compactAnchorY.takeIf { it >= 0 } ?: params.y
-            clampBubblePosition(anchorX, anchorY, width, height)
+            savedCompactPosition?.let { it.x to it.y } ?: run {
+                val anchorX = compactAnchorX.takeIf { it >= 0 } ?: params.x
+                val anchorY = compactAnchorY.takeIf { it >= 0 } ?: params.y
+                clampBubblePosition(anchorX, anchorY, width, height)
+            }
         }
         if (
             params.width == width &&
@@ -278,7 +294,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         if (!expanded) {
             compactAnchorX = params.x
             compactAnchorY = params.y
-            repository.setBubblePosition(params.x, params.y)
+            saveBubblePosition(params.x, params.y, width, height)
         }
         runCatching { windowManager.updateViewLayout(view, params) }
     }
@@ -303,7 +319,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         if (!overlayExpanded) {
             compactAnchorX = clamped.first
             compactAnchorY = clamped.second
-            repository.setBubblePosition(clamped.first, clamped.second)
+            saveBubblePosition(clamped.first, clamped.second, params.width, params.height)
         }
         runCatching { windowManager.updateViewLayout(view, params) }
     }
@@ -315,6 +331,39 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     private fun expandedWidthPx(compactSize: Int): Int = (compactSize * 3.6f).toInt()
 
     private fun edgePaddingPx(): Int = dp(12)
+
+    private fun savedBubblePlacement(): BubblePlacement? {
+        val edge = when (repository.getBubbleEdge()) {
+            BubbleEdge.START.name -> BubbleEdge.START
+            BubbleEdge.END.name -> BubbleEdge.END
+            else -> return null
+        }
+        val verticalFraction = repository.getBubbleVerticalFraction() ?: return null
+        return BubblePlacement(edge, verticalFraction)
+    }
+
+    private fun saveBubblePosition(x: Int, y: Int, width: Int, height: Int) {
+        repository.setBubblePosition(x, y)
+        val placement = BubblePlacement.fromPosition(x, y, bubbleBounds(width, height))
+        repository.setBubblePlacement(placement.edge.name, placement.verticalFraction)
+    }
+
+    private fun bubbleBounds(width: Int, height: Int): BubbleBounds {
+        val bounds = screenBounds()
+        return BubbleBounds(
+            width = bounds.width(),
+            height = bounds.height(),
+            bubbleWidth = width,
+            bubbleHeight = height,
+            edgePadding = edgePaddingPx()
+        )
+    }
+
+    private fun defaultBubbleVerticalFraction(bounds: BubbleBounds): Float {
+        val yRange = bounds.maxY - bounds.minY
+        if (yRange <= 0) return 0f
+        return ((bounds.height / 3) - bounds.minY).toFloat() / yRange
+    }
 
     private fun positionForExpandedOverlay(compactX: Int, compactY: Int, expandedWidth: Int, expandedHeight: Int): Pair<Int, Int> {
         val compactSize = compactSizePx()
@@ -696,6 +745,8 @@ private enum class InsertionResult(
 }
 
 private class VoiceSlipInputMethod(service: VoiceSlipAccessibilityService) : InputMethod(service) {
+    fun targetPackageName(): String? = currentInputEditorInfo?.packageName
+
     fun commitText(text: String): Boolean {
         if (!currentInputStarted) return false
         val connection = currentInputConnection ?: return false

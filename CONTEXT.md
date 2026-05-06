@@ -68,6 +68,14 @@ _Avoid_: markdown formatting when the structure is the domain concept
 A built-in formatting and tone constraint applied after the **Cleanup Policy** preserves dictated meaning, wording, vocabulary, and structure.
 _Avoid_: rewrite instruction for built-in presets
 
+**Floating Bubble Placement**:
+The saved user intent for where the floating dictation bubble belongs, expressed relative to a screen edge and usable vertical space.
+_Avoid_: raw bubble coordinates when describing persisted placement
+
+**Target App**:
+The high-confidence app context that owns the editable field VoiceSlip is recording for.
+_Avoid_: last foreground app when the value is stale or inferred
+
 ## Relationships
 
 - A **Dictation Pipeline** has one or more model steps.
@@ -83,6 +91,11 @@ _Avoid_: rewrite instruction for built-in presets
 - Cleanup always receives the full set of **Dictionary Entries**, regardless of **Dictionary During Transcription**.
 - The **Cleanup Policy** preserves **Dictated Structure** before style prompts adjust tone and punctuation.
 - A **Style Preset** constrains formatting and tone; it should not paraphrase dictated wording unless a user-authored custom style explicitly asks for that.
+- A **Style Preset** may adjust **Dictionary Entry** casing when casing is part of the preset, but it should otherwise preserve saved spellings.
+- The Formal **Style Preset** may lightly improve grammar, punctuation, and register, but should not replace the user's vocabulary to sound more formal.
+- Built-in **Style Preset** default changes should be versioned while preserving user-authored overrides.
+- **Floating Bubble Placement** should survive screen rotation by preserving edge affinity and relative vertical position, not absolute pixels.
+- A **Target App** may resolve from the focused application window, active root, focused editable node, or input editor package; if none is high-confidence, VoiceSlip should treat it as unknown.
 
 ## Example dialogue
 
@@ -101,3 +114,5 @@ _Avoid_: rewrite instruction for built-in presets
 - "Terms included" was ambiguous after Mistral splits multi-word entries. Resolved: distinguish saved **Dictionary Entries** from provider-specific **Bias Tokens**.
 - "Create a list" could imply inventing structure. Resolved: **Dictated Structure** should be rendered when clearly spoken, while preserving the user's lead-in wording where possible.
 - "Casual style" could imply paraphrasing into more casual vocabulary. Resolved: built-in **Style Presets** are formatting and tone constraints, not paraphrasing instructions.
+- "Bubble position" could mean live overlay pixels or saved user placement. Resolved: **Floating Bubble Placement** is persisted as edge-relative intent; raw coordinates are only a rendering detail.
+- "Unknown app" could be resolved using the last seen foreground app. Rejected: **Target App** must come from high-confidence current editor/window signals to avoid applying the wrong style.

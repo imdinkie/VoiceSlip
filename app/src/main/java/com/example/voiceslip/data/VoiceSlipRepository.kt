@@ -54,6 +54,18 @@ class VoiceSlipRepository(context: Context) {
     fun setBubblePosition(x: Int, y: Int) {
         prefs.edit().putInt("bubble_x", x).putInt("bubble_y", y).apply()
     }
+    fun getBubbleEdge(): String? = prefs.getString("bubble_edge", null)
+    fun getBubbleVerticalFraction(): Float? = if (prefs.contains("bubble_vertical_fraction")) {
+        prefs.getFloat("bubble_vertical_fraction", 0f).coerceIn(0f, 1f)
+    } else {
+        null
+    }
+    fun setBubblePlacement(edge: String, verticalFraction: Float) {
+        prefs.edit()
+            .putString("bubble_edge", edge)
+            .putFloat("bubble_vertical_fraction", verticalFraction.coerceIn(0f, 1f))
+            .apply()
+    }
 
     fun getPipelineConfig(): PipelineConfig = dao.getPipelineConfig()?.toPipelineConfig() ?: PipelineConfig()
 
@@ -496,7 +508,7 @@ data class InstalledAppCacheState(
 
 private const val APP_CACHE_STALE_MS = 24L * 60L * 60L * 1000L
 private const val KEY_STYLE_DEFAULTS_VERSION = "style_defaults_version"
-private const val STYLE_DEFAULTS_VERSION = 3
+private const val STYLE_DEFAULTS_VERSION = 4
 private const val KEY_OPENROUTER_AUDIO_MODELS = "openrouter_audio_models"
 private const val KEY_OPENROUTER_AUDIO_FAVORITES = "openrouter_audio_favorite_model_ids"
 private const val KEY_OPENROUTER_AUDIO_DEFAULTS_SEEDED_VERSION = "openrouter_audio_defaults_seeded_version"
@@ -617,8 +629,8 @@ private val veryCasualPrompt = """
 Use a very casual texting style.
 
 Rules:
-- Use lowercase for ordinary words, even when the language would normally capitalize them.
-- Preserve names, brands, acronyms, initials, code-like tokens, and capitalization that changes meaning.
+- Use lowercase for all prose, including saved dictionary spellings.
+- Do not preserve capitalization from the transcript or dictionary.
 - Avoid commas.
 - Use question marks for clear questions.
 - If there is one sentence, do not add a period at the end.
@@ -636,8 +648,8 @@ Rules:
 - Use normal capitalization.
 - Avoid commas.
 - Use question marks for clear questions.
-- If there is one sentence, do not add a period at the end.
-- If there are multiple sentences, separate them with periods where needed.
+- End complete sentences with punctuation.
+- Separate multiple sentences with periods where needed.
 
 Example:
 Input: I just parked near the station. Can you meet me by the north entrance?
@@ -648,7 +660,8 @@ private val formalPrompt = """
 Use a formal writing style.
 
 Rules:
-- Use normal capitalization.
+- Use formally correct grammar, capitalization, and punctuation.
+- Use a slightly more formal register without replacing the speaker's vocabulary.
 - Use standard punctuation, including commas and periods where appropriate.
 - End complete sentences with punctuation.
 
