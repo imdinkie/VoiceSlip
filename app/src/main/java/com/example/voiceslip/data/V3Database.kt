@@ -83,10 +83,16 @@ data class PipelineConfigEntity(
     val transcriptionEngineKind: String,
     val transcriptionEngine: String,
     @ColumnInfo(defaultValue = "''")
+    val mistralTranscriptionEngine: String,
+    @ColumnInfo(defaultValue = "''")
+    val groqTranscriptionEngine: String,
+    @ColumnInfo(defaultValue = "''")
     val openRouterAudioTranscriptionModel: String,
     @ColumnInfo(defaultValue = "'BUILT_IN'")
     val audioDirectEngineKind: String,
     val audioDirectEngine: String,
+    @ColumnInfo(defaultValue = "''")
+    val mistralAudioDirectEngine: String,
     val postProcessingProvider: String,
     val postProcessingModel: String,
     @ColumnInfo(defaultValue = "''")
@@ -252,7 +258,7 @@ interface VoiceSlipDao {
         EngineDictionaryRoutingEntity::class,
         PromptSettingEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class VoiceSlipDatabase : RoomDatabase() {
@@ -268,7 +274,7 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                     VoiceSlipDatabase::class.java,
                     "voiceslip_v3.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .allowMainThreadQueries()
                     .build()
                     .also { instance = it }
@@ -285,6 +291,48 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterAudioDirectModel TEXT NOT NULL DEFAULT ''")
                 db.execSQL("UPDATE pipeline_config SET groqPostProcessingModel = postProcessingModel WHERE postProcessingProvider = 'GROQ'")
                 db.execSQL("UPDATE pipeline_config SET openRouterPostProcessingModel = postProcessingModel WHERE postProcessingProvider = 'OPENROUTER'")
+            }
+        }
+
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN mistralTranscriptionEngine TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN groqTranscriptionEngine TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN mistralAudioDirectEngine TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    """
+                    UPDATE pipeline_config
+                    SET mistralTranscriptionEngine = transcriptionEngine
+                    WHERE transcriptionEngineKind = 'BUILT_IN'
+                    AND transcriptionEngine IN (
+                        'MISTRAL_VOXTRAL_MINI_TRANSCRIBE',
+                        'MISTRAL_VOXTRAL_MINI_AUDIO',
+                        'MISTRAL_VOXTRAL_SMALL_AUDIO'
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE pipeline_config
+                    SET groqTranscriptionEngine = transcriptionEngine
+                    WHERE transcriptionEngineKind = 'BUILT_IN'
+                    AND transcriptionEngine IN (
+                        'GROQ_WHISPER_LARGE_V3',
+                        'GROQ_WHISPER_LARGE_V3_TURBO'
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE pipeline_config
+                    SET mistralAudioDirectEngine = audioDirectEngine
+                    WHERE audioDirectEngineKind = 'BUILT_IN'
+                    AND audioDirectEngine IN (
+                        'MISTRAL_VOXTRAL_MINI_AUDIO',
+                        'MISTRAL_VOXTRAL_SMALL_AUDIO'
+                    )
+                    """.trimIndent()
+                )
             }
         }
     }

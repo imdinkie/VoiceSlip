@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -109,8 +108,6 @@ import com.example.voiceslip.data.PostProcessingProvider
 import com.example.voiceslip.data.ProviderId
 import com.example.voiceslip.data.RecordingStatus
 import com.example.voiceslip.data.SecretStore
-import com.example.voiceslip.data.TranscriptionEngineId
-import com.example.voiceslip.data.AudioDirectEngineId
 import com.example.voiceslip.data.CATEGORY_OTHER
 import com.example.voiceslip.data.EngineKind
 import com.example.voiceslip.data.EngineDictionaryRoutingEntity
@@ -407,6 +404,7 @@ private fun VoiceSlipApp(
                     openRouterModels = openRouterModels,
                     openRouterAudioModels = openRouterAudioModels,
                     modelStatus = modelStatus,
+                    hasMistralKey = mistralKey.isNotBlank(),
                     hasGroqKey = groqKey.isNotBlank(),
                     hasOpenRouterKey = openRouterKey.isNotBlank(),
                     onConfigChange = {
@@ -721,6 +719,7 @@ private fun ModelsScreen(
     openRouterModels: List<ModelOption>,
     openRouterAudioModels: List<ModelOption>,
     modelStatus: String?,
+    hasMistralKey: Boolean,
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
     onConfigChange: (PipelineConfig) -> Unit,
@@ -745,9 +744,8 @@ private fun ModelsScreen(
             repository = repository,
             languageHints = languageHints,
             preserveSpokenLanguage = preserveSpokenLanguage,
-            openRouterAudioModels = openRouterAudioModels,
-            openRouterAudioFavoriteIds = audioFavoriteIds,
             modelStatus = modelStatus,
+            hasMistralKey = hasMistralKey,
             hasGroqKey = hasGroqKey,
             hasOpenRouterKey = hasOpenRouterKey,
             listState = mainListState,
@@ -755,14 +753,16 @@ private fun ModelsScreen(
             onLanguageHintsChange = onLanguageHintsChange,
             onPreserveSpokenLanguageChange = onPreserveSpokenLanguageChange,
             onPreview = { showPreview = true },
-            onManageOpenRouterAudio = { route = ModelsRoute.OpenRouterAudio(it) },
+            onManageAudioModel = { route = ModelsRoute.AudioModel(it) },
             onManagePostProcessing = { route = ModelsRoute.PostProcessing }
         )
-        is ModelsRoute.OpenRouterAudio -> OpenRouterAudioPickerScreen(
-            slot = currentRoute.slot,
+        is ModelsRoute.AudioModel -> AudioModelPickerScreen(
+            role = currentRoute.role,
             config = config,
             models = openRouterAudioModels,
             favoriteIds = audioFavoriteIds,
+            hasMistralKey = hasMistralKey,
+            hasGroqKey = hasGroqKey,
             hasOpenRouterKey = hasOpenRouterKey,
             modelStatus = modelStatus,
             onBack = { route = ModelsRoute.Main },
@@ -805,9 +805,8 @@ private fun ModelsMainScreen(
     repository: VoiceSlipRepository,
     languageHints: String,
     preserveSpokenLanguage: Boolean,
-    openRouterAudioModels: List<ModelOption>,
-    openRouterAudioFavoriteIds: List<String>,
     modelStatus: String?,
+    hasMistralKey: Boolean,
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
     listState: androidx.compose.foundation.lazy.LazyListState,
@@ -815,12 +814,9 @@ private fun ModelsMainScreen(
     onLanguageHintsChange: (String) -> Unit,
     onPreserveSpokenLanguageChange: (Boolean) -> Unit,
     onPreview: () -> Unit,
-    onManageOpenRouterAudio: (OpenRouterAudioSlot) -> Unit,
+    onManageAudioModel: (AudioModelPickerRole) -> Unit,
     onManagePostProcessing: () -> Unit
 ) {
-    val favoriteAudioRows = remember(openRouterAudioModels, openRouterAudioFavoriteIds) {
-        modelRows(openRouterAudioModels, openRouterAudioFavoriteIds, selectedId = null, query = "", favoritesOnly = true, fallbackProvider = "OpenRouter")
-    }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle("Models")
         LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -879,28 +875,34 @@ private fun ModelsMainScreen(
             }
             if (config.mode != PipelineMode.AUDIO_DIRECT) {
                 item {
-                    SettingsCard {
-                        Text("Transcription engine", fontWeight = FontWeight.SemiBold)
-                        TranscriptionEngineChoiceColumn(
-                            config = config,
-                            openRouterAudioRows = favoriteAudioRows,
-                            onSelectBuiltIn = { onConfigChange(config.copy(transcriptionEngineKind = EngineKind.BUILT_IN, transcriptionEngine = it)) },
-                            onSelectOpenRouter = { onConfigChange(config.copy(transcriptionEngineKind = EngineKind.OPENROUTER_AUDIO, openRouterAudioTranscriptionModel = it)) },
-                            onManageOpenRouterAudio = { onManageOpenRouterAudio(OpenRouterAudioSlot.TRANSCRIPTION) }
-                        )
+                    SettingsCard(
+                        modifier = Modifier.clickable { onManageAudioModel(AudioModelPickerRole.TRANSCRIPTION) }
+                    ) {
+                        Text("Transcription Model", fontWeight = FontWeight.SemiBold)
+                        Text(transcriptionModelSummary(config), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        transcriptionMissingKeySummary(config, hasMistralKey, hasGroqKey, hasOpenRouterKey)?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                        }
+                        OutlinedButton(
+                            onClick = { onManageAudioModel(AudioModelPickerRole.TRANSCRIPTION) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Choose model") }
                     }
                 }
             } else {
                 item {
-                    SettingsCard {
-                        Text("Audio direct model", fontWeight = FontWeight.SemiBold)
-                        AudioDirectChoiceColumn(
-                            config = config,
-                            openRouterAudioRows = favoriteAudioRows,
-                            onSelectBuiltIn = { onConfigChange(config.copy(audioDirectEngineKind = EngineKind.BUILT_IN, audioDirectEngine = it)) },
-                            onSelectOpenRouter = { onConfigChange(config.copy(audioDirectEngineKind = EngineKind.OPENROUTER_AUDIO, openRouterAudioDirectModel = it)) },
-                            onManageOpenRouterAudio = { onManageOpenRouterAudio(OpenRouterAudioSlot.AUDIO_DIRECT) }
-                        )
+                    SettingsCard(
+                        modifier = Modifier.clickable { onManageAudioModel(AudioModelPickerRole.AUDIO_DIRECT) }
+                    ) {
+                        Text("Audio Direct Model", fontWeight = FontWeight.SemiBold)
+                        Text(audioDirectModelSummary(config), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        audioDirectMissingKeySummary(config, hasMistralKey, hasOpenRouterKey)?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                        }
+                        OutlinedButton(
+                            onClick = { onManageAudioModel(AudioModelPickerRole.AUDIO_DIRECT) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Choose model") }
                     }
                 }
             }
@@ -935,21 +937,18 @@ private fun ModelsMainScreen(
 
 private sealed class ModelsRoute {
     object Main : ModelsRoute()
-    data class OpenRouterAudio(val slot: OpenRouterAudioSlot) : ModelsRoute()
+    data class AudioModel(val role: AudioModelPickerRole) : ModelsRoute()
     object PostProcessing : ModelsRoute()
 }
 
-private enum class OpenRouterAudioSlot(val title: String) {
-    TRANSCRIPTION("Choose transcription model"),
-    AUDIO_DIRECT("Choose audio direct model")
-}
-
 @Composable
-private fun OpenRouterAudioPickerScreen(
-    slot: OpenRouterAudioSlot,
+private fun AudioModelPickerScreen(
+    role: AudioModelPickerRole,
     config: PipelineConfig,
     models: List<ModelOption>,
     favoriteIds: List<String>,
+    hasMistralKey: Boolean,
+    hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
     modelStatus: String?,
     onBack: () -> Unit,
@@ -958,43 +957,61 @@ private fun OpenRouterAudioPickerScreen(
     onToggleFavorite: (String) -> Unit
 ) {
     BackHandler { onBack() }
-    var query by remember { mutableStateOf("") }
-    val selectedModel = when (slot) {
-        OpenRouterAudioSlot.TRANSCRIPTION -> config.openRouterAudioTranscriptionModel
-        OpenRouterAudioSlot.AUDIO_DIRECT -> config.openRouterAudioDirectModel
+    var pickerState by remember { mutableStateOf(initialAudioModelPickerState(role, config)) }
+    val activeProvider = pickerState.activeProvider
+    val selectedModel = selectedAudioModelId(config, role, activeProvider)
+    val providerOptions = when (role) {
+        AudioModelPickerRole.TRANSCRIPTION -> listOf(ProviderId.MISTRAL, ProviderId.GROQ, ProviderId.OPENROUTER)
+        AudioModelPickerRole.AUDIO_DIRECT -> listOf(ProviderId.MISTRAL, ProviderId.OPENROUTER)
     }
-    val rows = remember(models, favoriteIds, selectedModel, query) {
-        modelRows(models, favoriteIds, selectedModel, query, fallbackProvider = "OpenRouter")
+    val hasKey = when (activeProvider) {
+        ProviderId.MISTRAL -> hasMistralKey
+        ProviderId.GROQ -> hasGroqKey
+        ProviderId.OPENROUTER -> hasOpenRouterKey
+    }
+    val rows = remember(role, activeProvider, models, favoriteIds, selectedModel, pickerState.query) {
+        if (activeProvider == ProviderId.OPENROUTER) {
+            modelRows(models, favoriteIds, selectedModel, pickerState.query, fallbackProvider = "OpenRouter")
+        } else {
+            builtInAudioRows(role, activeProvider)
+        }
     }
     LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { ScreenHeader(slot.title, onBack) }
+        item { ScreenHeader(audioPickerTitle(role), onBack) }
         item {
             SettingsCard {
-                Text("Current selected", fontWeight = FontWeight.SemiBold)
-                Text(selectedModel.ifBlank { "No OpenRouter audio model selected" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (selectedModel.isNotBlank() && rows.firstOrNull { it.id == selectedModel }?.isAvailable == false) {
-                    Text("Unavailable in latest refresh", color = MaterialTheme.colorScheme.error)
+                Text("Provider Groups", fontWeight = FontWeight.SemiBold)
+                ChoiceRow(
+                    options = providerOptions.map { it.label },
+                    selected = activeProvider.label
+                ) { label ->
+                    pickerState = pickerState.switchProvider(providerOptions.first { it.label == label })
+                }
+                if (!hasKey) {
+                    Text("Missing ${activeProvider.label} API key", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
-        item {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Search models") },
-                singleLine = true
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(onClick = onRefresh, enabled = hasOpenRouterKey) { Text("Refresh") }
-                modelStatus?.let { Text(it, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (activeProvider == ProviderId.OPENROUTER) {
+            item {
+                OutlinedTextField(
+                    value = pickerState.query,
+                    onValueChange = { pickerState = pickerState.copy(query = it) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Search models") },
+                    singleLine = true
+                )
             }
-            if (!hasOpenRouterKey) {
-                Text("Add an OpenRouter API key to refresh compatible audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else if (models.isEmpty()) {
-                Text("Refresh to load compatible OpenRouter audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = onRefresh, enabled = hasOpenRouterKey) { Text("Refresh OpenRouter") }
+                    modelStatus?.let { Text(it, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                if (!hasOpenRouterKey) {
+                    Text("Add an OpenRouter API key to refresh compatible audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else if (models.isEmpty()) {
+                    Text("Refresh to load compatible OpenRouter audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         if (rows.isEmpty()) {
@@ -1003,22 +1020,15 @@ private fun OpenRouterAudioPickerScreen(
         items(rows, key = { it.id }) { row ->
             ModelPickerRow(
                 row = row,
-                selected = row.id == selectedModel,
-                favorite = row.id in favoriteIds,
+                selected = isActiveAudioModel(config, role, activeProvider, row.id),
+                savedForProvider = isSavedAudioModel(config, role, activeProvider, row.id),
+                favorite = activeProvider == ProviderId.OPENROUTER && row.id in favoriteIds,
                 onClick = {
-                    val updated = when (slot) {
-                        OpenRouterAudioSlot.TRANSCRIPTION -> config.copy(
-                            transcriptionEngineKind = EngineKind.OPENROUTER_AUDIO,
-                            openRouterAudioTranscriptionModel = row.id
-                        )
-                        OpenRouterAudioSlot.AUDIO_DIRECT -> config.copy(
-                            audioDirectEngineKind = EngineKind.OPENROUTER_AUDIO,
-                            openRouterAudioDirectModel = row.id
-                        )
-                    }
-                    onConfigChange(updated)
+                    onConfigChange(pickerState.selectModel(config, row.id))
+                    onBack()
                 },
-                onToggleFavorite = { onToggleFavorite(row.id) }
+                onToggleFavorite = { if (activeProvider == ProviderId.OPENROUTER) onToggleFavorite(row.id) },
+                showFavorite = activeProvider == ProviderId.OPENROUTER
             )
         }
     }
@@ -1116,7 +1126,8 @@ private fun ModelPickerRow(
     savedForProvider: Boolean = false,
     favorite: Boolean,
     onClick: () -> Unit,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    showFavorite: Boolean = true
 ) {
     val container = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
     val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
@@ -1152,12 +1163,14 @@ private fun ModelPickerRow(
                     Text("Last selected for ${row.provider}; not active", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            IconButton(onClick = onToggleFavorite) {
-                Icon(
-                    imageVector = if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                    contentDescription = if (favorite) "Remove favorite" else "Add favorite",
-                    tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            if (showFavorite) {
+                IconButton(onClick = onToggleFavorite) {
+                    Icon(
+                        imageVector = if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                        contentDescription = if (favorite) "Remove favorite" else "Add favorite",
+                        tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -1165,12 +1178,12 @@ private fun ModelPickerRow(
 
 private fun modelRowSubtitle(row: ModelDisplayRow): String {
     val availability = if (row.isAvailable) "" else " · Unavailable in latest refresh"
-    return "${row.provider} · ${row.id}$availability"
+    return "${row.provider} · ${row.detail}$availability"
 }
 
 @Composable
-private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+private fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Card(modifier = modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
     }
 }
@@ -1195,110 +1208,6 @@ private fun ChoiceColumn(options: List<String>, selected: String, onSelect: (Str
     }
 }
 
-@Composable
-private fun TranscriptionEngineChoiceColumn(
-    config: PipelineConfig,
-    openRouterAudioRows: List<ModelDisplayRow>,
-    onSelectBuiltIn: (TranscriptionEngineId) -> Unit,
-    onSelectOpenRouter: (String) -> Unit,
-    onManageOpenRouterAudio: () -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        TranscriptionEngineId.entries.forEach { engine ->
-            EngineChoiceButton(
-                title = engine.displayName,
-                detail = "${engine.provider.label} · ${engine.model} · ${engineRole(engine)}",
-                selected = config.transcriptionEngineKind == EngineKind.BUILT_IN && engine == config.transcriptionEngine,
-                onClick = { onSelectBuiltIn(engine) }
-            )
-        }
-        Text("OpenRouter audio", fontWeight = FontWeight.SemiBold)
-        if (openRouterAudioRows.isEmpty()) {
-            Text("No favorites yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            openRouterAudioRows.forEach { row ->
-                EngineChoiceButton(
-                    title = row.name,
-                    detail = "OpenRouter · ${row.id} · audio${if (row.isAvailable) "" else " · Unavailable in latest refresh"}",
-                    selected = config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO && config.openRouterAudioTranscriptionModel == row.id,
-                    onClick = { onSelectOpenRouter(row.id) }
-                )
-            }
-        }
-        OutlinedButton(onClick = onManageOpenRouterAudio, modifier = Modifier.fillMaxWidth()) { Text("Manage OpenRouter audio models") }
-    }
-}
-
-@Composable
-private fun AudioDirectChoiceColumn(
-    config: PipelineConfig,
-    openRouterAudioRows: List<ModelDisplayRow>,
-    onSelectBuiltIn: (AudioDirectEngineId) -> Unit,
-    onSelectOpenRouter: (String) -> Unit,
-    onManageOpenRouterAudio: () -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        AudioDirectEngineId.entries.forEach { engine ->
-            val warning = if (engine == AudioDirectEngineId.MISTRAL_VOXTRAL_MINI_AUDIO) {
-                " · Not recommended: prone to formatting and repetition errors."
-            } else {
-                ""
-            }
-            EngineChoiceButton(
-                title = engine.displayName,
-                detail = "${engine.provider.label} · ${engine.model} · audio chat -> final text$warning",
-                selected = config.audioDirectEngineKind == EngineKind.BUILT_IN && engine == config.audioDirectEngine,
-                onClick = { onSelectBuiltIn(engine) }
-            )
-        }
-        Text("OpenRouter audio", fontWeight = FontWeight.SemiBold)
-        if (openRouterAudioRows.isEmpty()) {
-            Text("No favorites yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            openRouterAudioRows.forEach { row ->
-                EngineChoiceButton(
-                    title = row.name,
-                    detail = "OpenRouter · ${row.id} · audio${if (row.isAvailable) "" else " · Unavailable in latest refresh"}",
-                    selected = config.audioDirectEngineKind == EngineKind.OPENROUTER_AUDIO && config.openRouterAudioDirectModel == row.id,
-                    onClick = { onSelectOpenRouter(row.id) }
-                )
-            }
-        }
-        OutlinedButton(onClick = onManageOpenRouterAudio, modifier = Modifier.fillMaxWidth()) { Text("Manage OpenRouter audio models") }
-    }
-}
-
-@Composable
-private fun EngineChoiceButton(
-    title: String,
-    detail: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val content: @Composable RowScope.() -> Unit = {
-        Column(Modifier.fillMaxWidth()) {
-            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-    if (selected) Button(onClick = onClick, modifier = Modifier.fillMaxWidth(), content = content)
-    else OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth(), content = content)
-}
-
-private fun engineRole(engine: TranscriptionEngineId): String {
-    return when {
-        engine.audioChat -> "audio chat -> raw transcript"
-        engine.provider == ProviderId.GROQ -> "speech-to-text endpoint"
-        else -> "transcription endpoint"
-    }
-}
-
 private fun activePipelineText(config: PipelineConfig): String {
     return when (config.mode) {
         PipelineMode.PURE_TRANSCRIPTION ->
@@ -1308,6 +1217,39 @@ private fun activePipelineText(config: PipelineConfig): String {
         PipelineMode.AUDIO_DIRECT ->
             "Active: ${config.audioDirectDisplayName()} (${config.audioDirectModel()}) with the recording-start style prompt in one call."
     }
+}
+
+private fun transcriptionModelSummary(config: PipelineConfig): String =
+    "${config.transcriptionProvider().label} · ${config.transcriptionModel()} · ${config.transcriptionDisplayName()}"
+
+private fun audioDirectModelSummary(config: PipelineConfig): String =
+    "${config.audioDirectProvider().label} · ${config.audioDirectModel()} · ${config.audioDirectDisplayName()}"
+
+private fun audioPickerTitle(role: AudioModelPickerRole): String =
+    when (role) {
+        AudioModelPickerRole.TRANSCRIPTION -> "Choose transcription model"
+        AudioModelPickerRole.AUDIO_DIRECT -> "Choose audio direct model"
+    }
+
+private fun transcriptionMissingKeySummary(
+    config: PipelineConfig,
+    hasMistralKey: Boolean,
+    hasGroqKey: Boolean,
+    hasOpenRouterKey: Boolean
+): String? = when (config.transcriptionProvider()) {
+    ProviderId.MISTRAL -> if (hasMistralKey) null else "Missing Mistral API key for the selected transcription model."
+    ProviderId.GROQ -> if (hasGroqKey) null else "Missing Groq API key for the selected transcription model."
+    ProviderId.OPENROUTER -> if (hasOpenRouterKey) null else "Missing OpenRouter API key for the selected transcription model."
+}
+
+private fun audioDirectMissingKeySummary(
+    config: PipelineConfig,
+    hasMistralKey: Boolean,
+    hasOpenRouterKey: Boolean
+): String? = when (config.audioDirectProvider()) {
+    ProviderId.MISTRAL -> if (hasMistralKey) null else "Missing Mistral API key for the selected audio direct model."
+    ProviderId.OPENROUTER -> if (hasOpenRouterKey) null else "Missing OpenRouter API key for the selected audio direct model."
+    ProviderId.GROQ -> null
 }
 
 private fun postProcessingModelSummary(config: PipelineConfig): String {

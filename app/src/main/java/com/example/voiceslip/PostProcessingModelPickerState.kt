@@ -1,14 +1,19 @@
 package com.example.voiceslip
 
 import com.example.voiceslip.data.ModelOption
+import com.example.voiceslip.data.AudioDirectEngineId
+import com.example.voiceslip.data.EngineKind
 import com.example.voiceslip.data.PipelineConfig
 import com.example.voiceslip.data.PostProcessingProvider
+import com.example.voiceslip.data.ProviderId
+import com.example.voiceslip.data.TranscriptionEngineId
 
 internal data class ModelDisplayRow(
     val id: String,
     val name: String,
     val provider: String,
-    val isAvailable: Boolean
+    val isAvailable: Boolean,
+    val detail: String = id
 )
 
 internal data class PostProcessingPickerState(
@@ -44,6 +49,167 @@ internal fun isActivePostProcessingModel(config: PipelineConfig, provider: PostP
 internal fun isSavedPostProcessingModel(config: PipelineConfig, provider: PostProcessingProvider, modelId: String): Boolean =
     config.postProcessingProvider != provider && selectedPostProcessingModel(config, provider) == modelId
 
+internal enum class AudioModelPickerRole {
+    TRANSCRIPTION,
+    AUDIO_DIRECT
+}
+
+internal data class AudioModelPickerState(
+    val role: AudioModelPickerRole,
+    val activeProvider: ProviderId,
+    val query: String = ""
+) {
+    fun switchProvider(provider: ProviderId): AudioModelPickerState =
+        copy(activeProvider = provider, query = "")
+
+    fun selectModel(config: PipelineConfig, modelId: String): PipelineConfig =
+        when (role) {
+            AudioModelPickerRole.TRANSCRIPTION -> selectTranscriptionModel(config, activeProvider, modelId)
+            AudioModelPickerRole.AUDIO_DIRECT -> selectAudioDirectModel(config, activeProvider, modelId)
+        }
+}
+
+internal fun initialAudioModelPickerState(role: AudioModelPickerRole, config: PipelineConfig): AudioModelPickerState =
+    AudioModelPickerState(
+        role = role,
+        activeProvider = when (role) {
+            AudioModelPickerRole.TRANSCRIPTION -> config.transcriptionProvider()
+            AudioModelPickerRole.AUDIO_DIRECT -> config.audioDirectProvider()
+        }
+    )
+
+internal fun selectedAudioModelId(config: PipelineConfig, role: AudioModelPickerRole, provider: ProviderId): String =
+    when (role) {
+        AudioModelPickerRole.TRANSCRIPTION -> when (provider) {
+            ProviderId.MISTRAL, ProviderId.GROQ -> config.transcriptionEngine.takeIf { it.provider == provider }?.name.orEmpty()
+            ProviderId.OPENROUTER -> config.openRouterAudioTranscriptionModel
+        }
+        AudioModelPickerRole.AUDIO_DIRECT -> when (provider) {
+            ProviderId.MISTRAL -> config.audioDirectEngine.takeIf { it.provider == provider }?.name.orEmpty()
+            ProviderId.GROQ -> ""
+            ProviderId.OPENROUTER -> config.openRouterAudioDirectModel
+        }
+    }
+
+internal fun savedAudioModelId(config: PipelineConfig, role: AudioModelPickerRole, provider: ProviderId): String =
+    when (role) {
+        AudioModelPickerRole.TRANSCRIPTION -> when (provider) {
+            ProviderId.MISTRAL -> config.mistralTranscriptionEngine?.name.orEmpty()
+            ProviderId.GROQ -> config.groqTranscriptionEngine?.name.orEmpty()
+            ProviderId.OPENROUTER -> config.openRouterAudioTranscriptionModel
+        }
+        AudioModelPickerRole.AUDIO_DIRECT -> when (provider) {
+            ProviderId.MISTRAL -> config.mistralAudioDirectEngine?.name.orEmpty()
+            ProviderId.GROQ -> ""
+            ProviderId.OPENROUTER -> config.openRouterAudioDirectModel
+        }
+    }
+
+internal fun isActiveAudioModel(config: PipelineConfig, role: AudioModelPickerRole, provider: ProviderId, modelId: String): Boolean =
+    activeAudioProvider(config, role) == provider && selectedAudioModelId(config, role, provider) == modelId
+
+internal fun isSavedAudioModel(config: PipelineConfig, role: AudioModelPickerRole, provider: ProviderId, modelId: String): Boolean =
+    activeAudioProvider(config, role) != provider && savedAudioModelId(config, role, provider) == modelId
+
+internal fun builtInAudioRows(role: AudioModelPickerRole, provider: ProviderId): List<ModelDisplayRow> =
+    when (role) {
+        AudioModelPickerRole.TRANSCRIPTION -> TranscriptionEngineId.entries
+            .filter { it.provider == provider }
+            .map {
+                ModelDisplayRow(
+                    id = it.name,
+                    name = it.displayName,
+                    provider = it.provider.label,
+                    isAvailable = true,
+                    detail = "${it.model} · ${transcriptionEngineRole(it)}"
+                )
+            }
+        AudioModelPickerRole.AUDIO_DIRECT -> AudioDirectEngineId.entries
+            .filter { it.provider == provider }
+            .map {
+                ModelDisplayRow(
+                    id = it.name,
+                    name = it.displayName,
+                    provider = it.provider.label,
+                    isAvailable = true,
+                    detail = "${it.model} · audio chat -> final text"
+                )
+            }
+    }
+
+private fun activeAudioProvider(config: PipelineConfig, role: AudioModelPickerRole): ProviderId =
+    when (role) {
+        AudioModelPickerRole.TRANSCRIPTION -> config.transcriptionProvider()
+        AudioModelPickerRole.AUDIO_DIRECT -> config.audioDirectProvider()
+    }
+
+private fun selectTranscriptionModel(config: PipelineConfig, provider: ProviderId, modelId: String): PipelineConfig =
+    when (provider) {
+        ProviderId.MISTRAL, ProviderId.GROQ -> {
+            val engine = TranscriptionEngineId.entries.firstOrNull { it.name == modelId } ?: return config
+            val rememberedConfig = config.rememberActiveTranscriptionModel()
+            when (provider) {
+                ProviderId.MISTRAL -> rememberedConfig.copy(
+                    transcriptionEngineKind = EngineKind.BUILT_IN,
+                    transcriptionEngine = engine,
+                    mistralTranscriptionEngine = engine
+                )
+                ProviderId.GROQ -> rememberedConfig.copy(
+                    transcriptionEngineKind = EngineKind.BUILT_IN,
+                    transcriptionEngine = engine,
+                    groqTranscriptionEngine = engine
+                )
+                ProviderId.OPENROUTER -> rememberedConfig
+            }
+        }
+        ProviderId.OPENROUTER -> config.rememberActiveTranscriptionModel().copy(
+            transcriptionEngineKind = EngineKind.OPENROUTER_AUDIO,
+            openRouterAudioTranscriptionModel = modelId
+        )
+    }
+
+private fun selectAudioDirectModel(config: PipelineConfig, provider: ProviderId, modelId: String): PipelineConfig =
+    when (provider) {
+        ProviderId.MISTRAL -> {
+            val engine = AudioDirectEngineId.entries.firstOrNull { it.name == modelId } ?: return config
+            config.rememberActiveAudioDirectModel().copy(
+                audioDirectEngineKind = EngineKind.BUILT_IN,
+                audioDirectEngine = engine,
+                mistralAudioDirectEngine = engine
+            )
+        }
+        ProviderId.GROQ -> config.rememberActiveAudioDirectModel()
+        ProviderId.OPENROUTER -> config.rememberActiveAudioDirectModel().copy(
+            audioDirectEngineKind = EngineKind.OPENROUTER_AUDIO,
+            openRouterAudioDirectModel = modelId
+        )
+    }
+
+private fun PipelineConfig.rememberActiveTranscriptionModel(): PipelineConfig {
+    if (transcriptionEngineKind != EngineKind.BUILT_IN) return this
+    return when (transcriptionEngine.provider) {
+        ProviderId.MISTRAL -> if (mistralTranscriptionEngine == null) copy(mistralTranscriptionEngine = transcriptionEngine) else this
+        ProviderId.GROQ -> if (groqTranscriptionEngine == null) copy(groqTranscriptionEngine = transcriptionEngine) else this
+        ProviderId.OPENROUTER -> this
+    }
+}
+
+private fun PipelineConfig.rememberActiveAudioDirectModel(): PipelineConfig {
+    if (audioDirectEngineKind != EngineKind.BUILT_IN) return this
+    return when (audioDirectEngine.provider) {
+        ProviderId.MISTRAL -> if (mistralAudioDirectEngine == null) copy(mistralAudioDirectEngine = audioDirectEngine) else this
+        ProviderId.GROQ,
+        ProviderId.OPENROUTER -> this
+    }
+}
+
+private fun transcriptionEngineRole(engine: TranscriptionEngineId): String =
+    when {
+        engine.audioChat -> "audio chat -> raw transcript"
+        engine.provider == ProviderId.GROQ -> "speech-to-text endpoint"
+        else -> "transcription endpoint"
+    }
+
 internal fun modelRows(
     models: List<ModelOption>,
     favoriteIds: List<String>,
@@ -66,7 +232,8 @@ internal fun modelRows(
             id = id,
             name = model?.name ?: id,
             provider = model?.provider?.takeIf { it.isNotBlank() } ?: fallbackProvider,
-            isAvailable = model != null
+            isAvailable = model != null,
+            detail = id
         )
         row.takeIf { cleanQuery.isBlank() || it.id.contains(cleanQuery, true) || it.name.contains(cleanQuery, true) }
     }

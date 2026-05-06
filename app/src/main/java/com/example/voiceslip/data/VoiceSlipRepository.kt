@@ -354,9 +354,12 @@ class VoiceSlipRepository(context: Context) {
         .put("mode", config.mode.name)
         .put("transcriptionEngineKind", config.transcriptionEngineKind.name)
         .put("transcriptionEngine", config.transcriptionEngine.name)
+        .put("mistralTranscriptionEngine", config.mistralTranscriptionEngine?.name.orEmpty())
+        .put("groqTranscriptionEngine", config.groqTranscriptionEngine?.name.orEmpty())
         .put("openRouterAudioTranscriptionModel", config.openRouterAudioTranscriptionModel)
         .put("audioDirectEngineKind", config.audioDirectEngineKind.name)
         .put("audioDirectEngine", config.audioDirectEngine.name)
+        .put("mistralAudioDirectEngine", config.mistralAudioDirectEngine?.name.orEmpty())
         .put("postProcessingProvider", config.postProcessingProvider.name)
         .put("groqPostProcessingModel", config.groqPostProcessingModel)
         .put("openRouterPostProcessingModel", config.openRouterPostProcessingModel)
@@ -640,9 +643,12 @@ private fun PipelineConfig.toEntity(): PipelineConfigEntity = PipelineConfigEnti
     mode = mode.name,
     transcriptionEngineKind = transcriptionEngineKind.name,
     transcriptionEngine = transcriptionEngine.name,
+    mistralTranscriptionEngine = mistralTranscriptionEngine?.name.orEmpty(),
+    groqTranscriptionEngine = groqTranscriptionEngine?.name.orEmpty(),
     openRouterAudioTranscriptionModel = openRouterAudioTranscriptionModel,
     audioDirectEngineKind = audioDirectEngineKind.name,
     audioDirectEngine = audioDirectEngine.name,
+    mistralAudioDirectEngine = mistralAudioDirectEngine?.name.orEmpty(),
     postProcessingProvider = postProcessingProvider.name,
     postProcessingModel = postProcessingModel,
     groqPostProcessingModel = groqPostProcessingModel,
@@ -656,9 +662,12 @@ private fun PipelineConfigEntity.toPipelineConfig(): PipelineConfig {
         mode = enumValue(mode, PipelineMode.PURE_TRANSCRIPTION),
         transcriptionEngineKind = enumValue(transcriptionEngineKind, EngineKind.BUILT_IN),
         transcriptionEngine = enumValue(transcriptionEngine, TranscriptionEngineId.MISTRAL_VOXTRAL_MINI_TRANSCRIBE),
+        mistralTranscriptionEngine = enumValueOrNull<TranscriptionEngineId>(mistralTranscriptionEngine),
+        groqTranscriptionEngine = enumValueOrNull<TranscriptionEngineId>(groqTranscriptionEngine),
         openRouterAudioTranscriptionModel = openRouterAudioTranscriptionModel,
         audioDirectEngineKind = enumValue(audioDirectEngineKind, EngineKind.BUILT_IN),
         audioDirectEngine = enumValue(audioDirectEngine, AudioDirectEngineId.MISTRAL_VOXTRAL_SMALL_AUDIO),
+        mistralAudioDirectEngine = enumValueOrNull<AudioDirectEngineId>(mistralAudioDirectEngine),
         postProcessingProvider = provider,
         groqPostProcessingModel = groqPostProcessingModel.ifBlank { if (provider == PostProcessingProvider.GROQ) postProcessingModel else "" },
         openRouterPostProcessingModel = openRouterPostProcessingModel.ifBlank { if (provider == PostProcessingProvider.OPENROUTER) postProcessingModel else "" },
@@ -733,4 +742,9 @@ private fun JSONObject.toModelOption(): ModelOption = ModelOption(
 private inline fun <reified T : Enum<T>> enumValue(name: String?, default: T): T {
     if (name.isNullOrBlank()) return default
     return runCatching { enumValueOf<T>(name) }.getOrDefault(default)
+}
+
+private inline fun <reified T : Enum<T>> enumValueOrNull(name: String?): T? {
+    if (name.isNullOrBlank()) return null
+    return runCatching { enumValueOf<T>(name) }.getOrNull()
 }
