@@ -207,8 +207,8 @@ class PipelineExecutor(
 fun outputGuardRejection(text: String, durationMillis: Long): String? {
     val clean = text.trim()
     if (clean.length < 800) return null
-    repeatedLine(clean)?.let { return "Rejected model output because it repeated the same line excessively." }
-    repeatedPhrase(clean)?.let { return "Rejected model output because it contains extreme repeated phrasing." }
+    if (repeatedLine(clean)) return "Rejected model output because it repeated the same line excessively."
+    if (repeatedPhrase(clean)) return "Rejected model output because it contains extreme repeated phrasing."
     if (durationMillis > 0) {
         val seconds = (durationMillis / 1000L).coerceAtLeast(1L)
         val maxChars = maxOf(4_000L, seconds * 80L)
