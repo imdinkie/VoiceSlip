@@ -52,6 +52,10 @@ _Avoid_: dictionary routing in UI labels
 A saved user phrase that should be preserved as written when it matches dictated speech.
 _Avoid_: term when distinguishing saved entries from provider-specific prompt parts
 
+**Dictionary Entry Priority**:
+The user-controlled order that decides which **Dictionary Entries** are shown first and sent first when model input has limited space.
+_Avoid_: alphabetical dictionary order
+
 **Bias Token**:
 A provider-safe token derived from a **Dictionary Entry** for Mistral `context_bias`.
 _Avoid_: dictionary entry when referring to split `context_bias` inputs
@@ -63,6 +67,10 @@ _Avoid_: style prompt when referring to global cleanup rules
 **Dictated Structure**:
 The explicit organization spoken by the user, such as steps, requirements, tasks, or topic shifts, that should be preserved as paragraphs or lists.
 _Avoid_: markdown formatting when the structure is the domain concept
+
+**Spoken Punctuation**:
+Punctuation words that may represent formatting commands in dictated speech.
+_Avoid_: literal words when the speaker clearly intended punctuation
 
 **Style Preset**:
 A built-in formatting and tone constraint applied after the **Cleanup Policy** preserves dictated meaning, wording, vocabulary, and structure.
@@ -76,6 +84,14 @@ _Avoid_: raw bubble coordinates when describing persisted placement
 The high-confidence app context that owns the editable field VoiceSlip is recording for.
 _Avoid_: last foreground app when the value is stale or inferred
 
+**Secret Field**:
+An editor whose contents are credentials or similarly secret input that VoiceSlip should not expose for dictation.
+_Avoid_: sensitive field when referring to passwords, PINs, OTPs, CVVs, or card numbers
+
+**Private Editor**:
+An editor that asks keyboards not to learn from input but is not necessarily a **Secret Field**.
+_Avoid_: sensitive field when referring to browser address bars or no-personalized-learning editors
+
 ## Relationships
 
 - A **Dictation Pipeline** has one or more model steps.
@@ -86,16 +102,20 @@ _Avoid_: last foreground app when the value is stale or inferred
 - A **Model Picker** chooses one model for one **Dictation Pipeline** step.
 - A **Provider Group** belongs inside a **Model Picker**; it is not a separate pipeline decision.
 - Selecting a model in a **Model Picker** changes the active model for that pipeline step; toggling a **Favorite Model** does not.
-- **Favorite Models** are scoped to a provider catalog and role family: OpenRouter audio favorites are shared by transcription and audio-direct model pickers, while post-processing favorites are separate for Groq and OpenRouter.
+- **Favorite Models** are scoped to a provider catalog and role family: OpenRouter audio favorites are shared by transcription and audio-direct model pickers, while post-processing favorites are separate for Mistral, Groq, and OpenRouter.
 - **Dictionary During Transcription** may transform **Dictionary Entries** into provider-specific **Bias Tokens** before sending them to a transcription provider.
 - Cleanup always receives the full set of **Dictionary Entries**, regardless of **Dictionary During Transcription**.
+- **Dictionary Entry Priority** controls dictionary display order and the order in which dictionary prompt constraints are built.
 - The **Cleanup Policy** preserves **Dictated Structure** before style prompts adjust tone and punctuation.
+- The **Cleanup Policy** converts **Spoken Punctuation** only when the words function as formatting instructions in context.
 - A **Style Preset** constrains formatting and tone; it should not paraphrase dictated wording unless a user-authored custom style explicitly asks for that.
 - A **Style Preset** may adjust **Dictionary Entry** casing when casing is part of the preset, but it should otherwise preserve saved spellings.
 - The Formal **Style Preset** may lightly improve grammar, punctuation, and register, but should not replace the user's vocabulary to sound more formal.
 - Built-in **Style Preset** default changes should be versioned while preserving user-authored overrides.
 - **Floating Bubble Placement** should survive screen rotation by preserving edge affinity and relative vertical position, not absolute pixels.
 - A **Target App** may resolve from the focused application window, active root, focused editable node, or input editor package; if none is high-confidence, VoiceSlip should treat it as unknown.
+- A **Secret Field** always prevents VoiceSlip from showing the floating bubble or inserting dictated text.
+- A **Private Editor** may allow the floating bubble based on user preference; once recording starts, it should not block insertion by itself.
 
 ## Example dialogue
 
@@ -105,6 +125,9 @@ _Avoid_: last foreground app when the value is stale or inferred
 > **Dev:** "Should users choose Groq first and then choose a post-processing model?"
 > **Domain expert:** "No. The user chooses the concrete model in a **Model Picker**; Groq and OpenRouter are **Provider Groups** inside that choice."
 
+> **Dev:** "Should **Private Editors** be treated as sensitive fields?"
+> **Domain expert:** "No. Only **Secret Fields** are always blocked; **Private Editors** control whether the bubble appears before recording."
+
 ## Flagged ambiguities
 
 - "Pipeline preview" was used to mean both the whole inspection dialog and the exact prompt sent to a model. Resolved: **Pipeline Preview** is the whole dialog; model input must be labeled as prompt or system/user prompt.
@@ -112,7 +135,10 @@ _Avoid_: last foreground app when the value is stale or inferred
 - "Clicking a model" was ambiguous between inspecting, favoriting, and selecting. Resolved: tapping the model row selects it and returns; tapping the star only toggles **Favorite Model** state.
 - "Dictionary routing" sounded like the dictionary might be routed away from cleanup. Resolved: UI should say **Dictionary During Transcription**; cleanup always uses all **Dictionary Entries**.
 - "Terms included" was ambiguous after Mistral splits multi-word entries. Resolved: distinguish saved **Dictionary Entries** from provider-specific **Bias Tokens**.
+- "Sorting dictionary terms" could mean alphabetical display or model priority. Resolved: **Dictionary Entry Priority** is user-controlled order and replaces alphabetical order as the primary dictionary order.
 - "Create a list" could imply inventing structure. Resolved: **Dictated Structure** should be rendered when clearly spoken, while preserving the user's lead-in wording where possible.
+- "Question mark" could be literal sentence content or **Spoken Punctuation**. Resolved: convert it only when context shows it is a formatting instruction.
 - "Casual style" could imply paraphrasing into more casual vocabulary. Resolved: built-in **Style Presets** are formatting and tone constraints, not paraphrasing instructions.
 - "Bubble position" could mean live overlay pixels or saved user placement. Resolved: **Floating Bubble Placement** is persisted as edge-relative intent; raw coordinates are only a rendering detail.
 - "Unknown app" could be resolved using the last seen foreground app. Rejected: **Target App** must come from high-confidence current editor/window signals to avoid applying the wrong style.
+- "Sensitive field" was used for both password-class editors and no-personalized-learning editors. Resolved: use **Secret Field** for password/PIN/OTP/CVV/card input and **Private Editor** for no-personalized-learning fields such as browser address bars.
