@@ -80,9 +80,29 @@ _Avoid_: rewrite instruction for built-in presets
 The saved user intent for where the floating dictation bubble belongs, expressed relative to a screen edge and usable vertical space.
 _Avoid_: raw bubble coordinates when describing persisted placement
 
+**Push to Talk**:
+A secondary floating bubble gesture where holding the bubble records immediately and releasing it submits the dictation without a confirmation step.
+_Avoid_: push-to-talk mode
+
+**Submitted Dictation**:
+A recording that has been accepted for transcription, cleanup, and insertion but has not yet reached a final success, copy, cancellation, or failure outcome.
+_Avoid_: recording when the capture has already stopped
+
+**Retained Dictation**:
+A completed or failed dictation that remains visible in History with its recording file available for review or retry.
+_Avoid_: history item when distinguishing it from abandoned captures
+
+**Untrusted Dictation Boundary**:
+The fixed prompt structure that marks dictated transcript or audio content as data to transform rather than instructions to obey.
+_Avoid_: cleanup rule
+
 **Target App**:
 The high-confidence app context that owns the editable field VoiceSlip is recording for.
 _Avoid_: last foreground app when the value is stale or inferred
+
+**Accessibility Setup Status**:
+Whether Android reports the VoiceSlip accessibility service as enabled or the service is connected, independent of whether the bubble is visible in the current app.
+_Avoid_: bubble status
 
 **Secret Field**:
 An editor whose contents are credentials or similarly secret input that VoiceSlip should not expose for dictation.
@@ -108,12 +128,21 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - **Dictionary Entry Priority** controls dictionary display order and the order in which dictionary prompt constraints are built.
 - The **Cleanup Policy** preserves **Dictated Structure** before style prompts adjust tone and punctuation.
 - The **Cleanup Policy** converts **Spoken Punctuation** only when the words function as formatting instructions in context.
+- The **Untrusted Dictation Boundary** is app infrastructure and should not be overridable by **Cleanup Policy** or **Style Preset** customization.
 - A **Style Preset** constrains formatting and tone; it should not paraphrase dictated wording unless a user-authored custom style explicitly asks for that.
 - A **Style Preset** may adjust **Dictionary Entry** casing when casing is part of the preset, but it should otherwise preserve saved spellings.
 - The Formal **Style Preset** may lightly improve grammar, punctuation, and register, but should not replace the user's vocabulary to sound more formal.
 - Built-in **Style Preset** default changes should be versioned while preserving user-authored overrides.
 - **Floating Bubble Placement** should survive screen rotation by preserving edge affinity and relative vertical position, not absolute pixels.
+- **Push to Talk** coexists with tap-to-record; it does not replace the confirmed recording interaction.
+- **Push to Talk** should start only after an intentional hold; accidental near-immediate releases should not create a submitted dictation.
+- **Push to Talk** has no explicit cancel control once active; releasing submits unless the recording was below the accidental-hold threshold.
+- A **Submitted Dictation** keeps the floating bubble visible until transcription, cleanup, and insertion or copy have finished.
+- A canceled or accidental capture is not a **Retained Dictation** and should be removed from History while its recording file is deleted.
+- Orphaned recording files that are not referenced by **Retained Dictations** should be cleaned up after they are old enough to avoid active-recording races.
+- Screen-awake behavior belongs to active audio capture, not the later **Submitted Dictation** processing window.
 - A **Target App** may resolve from the focused application window, active root, focused editable node, or input editor package; if none is high-confidence, VoiceSlip should treat it as unknown.
+- **Accessibility Setup Status** does not imply that the bubble is visible, because VoiceSlip may intentionally hide the bubble in its own app or unsuitable fields.
 - A **Secret Field** always prevents VoiceSlip from showing the floating bubble or inserting dictated text.
 - A **Private Editor** does not hide the floating bubble or block insertion by itself.
 
@@ -140,5 +169,6 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - "Question mark" could be literal sentence content or **Spoken Punctuation**. Resolved: convert it only when context shows it is a formatting instruction.
 - "Casual style" could imply paraphrasing into more casual vocabulary. Resolved: built-in **Style Presets** are formatting and tone constraints, not paraphrasing instructions.
 - "Bubble position" could mean live overlay pixels or saved user placement. Resolved: **Floating Bubble Placement** is persisted as edge-relative intent; raw coordinates are only a rendering detail.
+- "Push to talk" could imply a separate recording mode. Resolved: **Push to Talk** is a secondary hold gesture available alongside tap-to-record.
 - "Unknown app" could be resolved using the last seen foreground app. Rejected: **Target App** must come from high-confidence current editor/window signals to avoid applying the wrong style.
 - "Sensitive field" was used for both password-class editors and no-personalized-learning editors. Resolved: use **Secret Field** for password/PIN/OTP/CVV/card input and **Private Editor** for no-personalized-learning fields such as browser address bars.

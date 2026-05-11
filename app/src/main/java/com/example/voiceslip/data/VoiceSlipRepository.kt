@@ -25,6 +25,8 @@ class VoiceSlipRepository(context: Context) {
     init {
         seedOpenRouterAudioFavorites()
         seedDefaults()
+        cleanupCanceledHistory()
+        cleanupOrphanedRecordings()
     }
 
     fun getAppEnabled(): Boolean = prefs.getBoolean("app_enabled", true)
@@ -151,6 +153,19 @@ class VoiceSlipRepository(context: Context) {
     fun clearHistory() {
         listHistory().forEach { runCatching { File(it.audioPath).delete() } }
         dao.clearHistory()
+    }
+
+    fun cleanupCanceledHistory() {
+        listHistory()
+            .filter { it.status == RecordingStatus.CANCELED }
+            .forEach { deleteHistory(it.id) }
+    }
+
+    fun cleanupOrphanedRecordings() {
+        cleanupOrphanedRecordingFiles(
+            recordingsDir = recordingsDir,
+            retainedAudioPaths = listHistory().map { it.audioPath }.toSet()
+        )
     }
 
     fun listStyles(): List<VoiceStyle> = dao.listStyles().map { it.toVoiceStyle() }

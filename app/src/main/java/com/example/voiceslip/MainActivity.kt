@@ -1,6 +1,7 @@
 package com.example.voiceslip
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -11,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.format.DateFormat
+import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -125,6 +127,7 @@ import com.example.voiceslip.net.buildAudioDirectPrompt
 import com.example.voiceslip.net.buildAudioTranscriptionPromptPreview
 import com.example.voiceslip.net.buildLanguageHintExamples
 import com.example.voiceslip.net.buildPostProcessingSystemPrompt
+import com.example.voiceslip.net.buildPostProcessingUserPrompt
 import com.example.voiceslip.net.outputGuardRejection
 import com.example.voiceslip.service.VoiceSlipAccessibilityService
 import com.example.voiceslip.ui.theme.VoiceSlipTheme
@@ -1489,7 +1492,7 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                         Text("Dictionary: cleanup receives all ${dictionary.size} Dictionary Entries as spelling constraints")
                         Text("Resolved style: {{style_prompt}}")
                         Text("System prompt:\n${postProcessingSystemPromptPreview(cleanupPolicy, preserveSpokenLanguage, dictionary.size)}")
-                        Text("User prompt:\nApply this formatting style:\n${resolution.stylePrompt}\n\nRaw transcript:\n{{raw_transcript}}")
+                        Text("User prompt:\n${buildPostProcessingUserPrompt(resolution.stylePrompt, "{{raw_transcript}}")}")
                     }
                 }
                 if (config.mode == PipelineMode.AUDIO_DIRECT) {
@@ -2805,11 +2808,22 @@ private fun currentSetupStatus(
 }
 
 private fun isAccessibilityEnabled(context: Context): Boolean {
-    val enabled = Settings.Secure.getString(
+    val settingsEnabled = Settings.Secure.getString(
         context.contentResolver,
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ).orEmpty()
-    return enabled.split(':').any { it.equals("${context.packageName}/com.example.voiceslip.service.VoiceSlipAccessibilityService", ignoreCase = true) }
+    ).orEmpty().split(':').filter { it.isNotBlank() }
+    val managerEnabled = context.getSystemService(AccessibilityManager::class.java)
+        ?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        .orEmpty()
+        .mapNotNull { info ->
+            val serviceInfo = info.resolveInfo?.serviceInfo ?: return@mapNotNull null
+            "${serviceInfo.packageName}/${serviceInfo.name}"
+        }
+    return isVoiceSlipAccessibilityServiceEnabled(
+        packageName = context.packageName,
+        enabledServiceIds = settingsEnabled + managerEnabled,
+        serviceConnected = VoiceSlipAccessibilityService.instance != null
+    )
 }
 
 private fun HistoryItem.withPipelineResult(

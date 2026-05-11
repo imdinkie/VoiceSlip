@@ -65,7 +65,9 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     private var currentConfigSnapshot: PipelineConfig? = null
     private var currentStyleSnapshot: StyleResolution? = null
     private var recordingStartedAt = 0L
+    private var currentInteraction = RecordingInteraction.CONFIRMED
     private var overlayExpanded = false
+    private var overlayPushToTalk = false
     private var compactAnchorX = -1
     private var compactAnchorY = -1
     private var accessibilityInputMethod: VoiceSlipInputMethod? = null
@@ -122,8 +124,13 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshOverlayVisibility() {
-        if (recorder.isRecording) return
-        if (shouldShowBubble()) showOverlay(expanded = false) else hideOverlay()
+        if (recorder.isRecording || currentItem?.status == RecordingStatus.TRANSCRIBING) return
+        if (shouldShowBubble()) showCompactOverlayWithoutCollapseFlicker() else hideOverlay()
+    }
+
+    private fun showCompactOverlayWithoutCollapseFlicker() {
+        if (overlayExpanded) hideOverlay()
+        showOverlay(expanded = false)
     }
 
     private fun shouldShowBubble(): Boolean {
@@ -205,15 +212,19 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             context = this,
             compactSizePx = compactSize,
             opacity = bubbleOpacity(),
-            onBubbleClick = { startRecording() },
+            onBubbleClick = { startRecording(RecordingInteraction.CONFIRMED) },
+            onPushToTalkStart = { startRecording(RecordingInteraction.PUSH_TO_TALK) },
+            onPushToTalkCancel = { cancelRecording(silent = true) },
+            onPushToTalkSubmit = { submitRecording() },
             onCancel = { cancelRecording() },
             onSubmit = { submitRecording() },
             onMove = { x, y -> moveOverlay(x, y) }
         )
+        view.setPushToTalk(overlayPushToTalk)
         view.setExpanded(expanded)
         overlay = view
 
-        val width = if (expanded) expandedWidthPx(compactSize) else compactSize
+        val width = if (expanded) expandedWidthPx(compactSize, overlayPushToTalk) else compactSize
         val height = compactSize
         val savedX = repository.getBubbleX()
         val savedY = repository.getBubbleY()
@@ -228,6 +239,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             savedX >= 0 && savedY >= 0 -> clampBubblePosition(savedX, savedY, compactSize, compactSize).let { BubblePosition(it.first, it.second) }
             else -> defaultPosition
         }
+        view.setOpensLeft(shouldExpandedOverlayOpenLeft(compactPosition.x, compactSize))
         compactAnchorX = compactPosition.x
         compactAnchorY = compactPosition.y
         val position = if (expanded) {
@@ -257,13 +269,15 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val compactSize = compactSizePx()
         view.setCompactSize(compactSize)
         view.setBubbleOpacity(bubbleOpacity())
+        view.setPushToTalk(overlayPushToTalk)
         view.setExpanded(expanded)
-        val width = if (expanded) expandedWidthPx(compactSize) else compactSize
+        val width = if (expanded) expandedWidthPx(compactSize, overlayPushToTalk) else compactSize
         val height = compactSize
         val savedCompactPosition = savedBubblePlacement()?.toPosition(bubbleBounds(compactSize, compactSize))
         val position = if (expanded) {
             val anchorX = savedCompactPosition?.x ?: compactAnchorX.takeIf { it >= 0 } ?: params.x
             val anchorY = savedCompactPosition?.y ?: compactAnchorY.takeIf { it >= 0 } ?: params.y
+            view.setOpensLeft(shouldExpandedOverlayOpenLeft(anchorX, compactSize))
             positionForExpandedOverlay(anchorX, anchorY, width, height)
         } else {
             savedCompactPosition?.let { it.x to it.y } ?: run {
@@ -299,6 +313,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         overlay = null
         overlayParams = null
         overlayExpanded = false
+        overlayPushToTalk = false
         compactAnchorX = -1
         compactAnchorY = -1
         runCatching { windowManager.removeView(view) }
@@ -323,7 +338,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
 
     private fun bubbleOpacity(): Float = repository.getBubbleOpacityPercent() / 100f
 
-    private fun expandedWidthPx(compactSize: Int): Int = (compactSize * 3.6f).toInt()
+    private fun expandedWidthPx(compactSize: Int, pushToTalk: Boolean): Int =
+        (compactSize * if (pushToTalk) 3.05f else 3.6f).toInt()
 
     private fun edgePaddingPx(): Int = dp(12)
 
@@ -362,11 +378,13 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
 
     private fun positionForExpandedOverlay(compactX: Int, compactY: Int, expandedWidth: Int, expandedHeight: Int): Pair<Int, Int> {
         val compactSize = compactSizePx()
-        val bounds = screenBounds()
-        val edgePadding = edgePaddingPx()
-        val opensLeft = compactX + compactSize / 2 > bounds.width() / 2
+        val opensLeft = shouldExpandedOverlayOpenLeft(compactX, compactSize)
         val desiredX = if (opensLeft) compactX + compactSize - expandedWidth else compactX
         return clampBubblePosition(desiredX, compactY, expandedWidth, expandedHeight)
+    }
+
+    private fun shouldExpandedOverlayOpenLeft(compactX: Int, compactSize: Int): Boolean {
+        return compactX + compactSize / 2 > screenBounds().width() / 2
     }
 
     private fun clampBubblePosition(rawX: Int, rawY: Int, width: Int, height: Int): Pair<Int, Int> {
@@ -386,7 +404,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun startRecording() {
+    private fun startRecording(interaction: RecordingInteraction) {
+        if (recorder.isRecording) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             toast("Microphone permission is required")
             return
@@ -410,6 +429,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             recordingStartedAt = System.currentTimeMillis()
             currentConfigSnapshot = config
             currentStyleSnapshot = styleResolution
+            currentInteraction = interaction
+            overlayPushToTalk = interaction == RecordingInteraction.PUSH_TO_TALK
             currentItem = HistoryItem(
                 id = id,
                 createdAtMillis = recordingStartedAt,
@@ -432,8 +453,10 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             ).also { repository.upsertHistory(it) }
             showOverlay(expanded = true)
             overlay?.setRecordingState(RecordingUiState.RECORDING)
+            setOverlayKeepScreenOn(true)
             mainHandler.post(tickRunnable)
         }.onFailure {
+            setOverlayKeepScreenOn(false)
             toast("Could not start recording: ${it.message}")
         }
     }
@@ -452,16 +475,17 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun cancelRecording() {
+    private fun cancelRecording(silent: Boolean = false) {
         mainHandler.removeCallbacks(tickRunnable)
-        haptic()
+        if (!silent) haptic()
         recorder.cancel()
-        currentItem?.let {
-            repository.upsertHistory(it.copy(status = RecordingStatus.CANCELED, durationMillis = System.currentTimeMillis() - it.createdAtMillis))
-        }
+        setOverlayKeepScreenOn(false)
+        currentItem?.let { repository.deleteHistory(it.id) }
         currentItem = null
         currentConfigSnapshot = null
         currentStyleSnapshot = null
+        currentInteraction = RecordingInteraction.CONFIRMED
+        overlayPushToTalk = false
         refreshOverlayVisibility()
     }
 
@@ -470,6 +494,19 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         mainHandler.removeCallbacks(tickRunnable)
         haptic()
         val result = recorder.stop() ?: return
+        setOverlayKeepScreenOn(false)
+        if (currentInteraction == RecordingInteraction.PUSH_TO_TALK && result.durationMillis < MIN_PUSH_TO_TALK_RECORDING_MS) {
+            currentItem?.let { repository.deleteHistory(it.id) }
+            currentItem = null
+            currentConfigSnapshot = null
+            currentStyleSnapshot = null
+            currentInteraction = RecordingInteraction.CONFIRMED
+            overlayPushToTalk = false
+            hideOverlay()
+            toast("Transcription cancelled")
+            refreshOverlayVisibility()
+            return
+        }
         val item = currentItem?.copy(
             durationMillis = result.durationMillis,
             status = RecordingStatus.TRANSCRIBING
@@ -482,6 +519,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         )
         currentItem = item
         repository.upsertHistory(item)
+        showOverlay(expanded = true)
         overlay?.setRecordingState(RecordingUiState.TRANSCRIBING)
         Thread {
             val updated = runCatching {
@@ -566,9 +604,13 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             }
             repository.upsertHistory(updated)
             mainHandler.post {
+                val completedPushToTalk = overlayPushToTalk
                 currentItem = null
                 currentConfigSnapshot = null
                 currentStyleSnapshot = null
+                currentInteraction = RecordingInteraction.CONFIRMED
+                overlayPushToTalk = false
+                if (completedPushToTalk) hideOverlay()
                 if (updated.status == RecordingStatus.SUCCEEDED) {
                     insertionToast(updated.errorStage)?.let { toast(it) }
                 } else {
@@ -667,6 +709,16 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun setOverlayKeepScreenOn(enabled: Boolean) {
+        val view = overlay ?: return
+        val params = overlayParams ?: return
+        val flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        val updatedFlags = if (enabled) params.flags or flag else params.flags and flag.inv()
+        if (params.flags == updatedFlags) return
+        params.flags = updatedFlags
+        runCatching { windowManager.updateViewLayout(view, params) }
+    }
+
     private fun toast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
@@ -675,6 +727,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val MAX_RECORDING_MS = 5 * 60 * 1000L
+        private const val MIN_PUSH_TO_TALK_RECORDING_MS = 800L
         private const val TAG = "VoiceSlip"
         var instance: VoiceSlipAccessibilityService? = null
             private set
@@ -688,6 +741,11 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             PipelineMode.AUDIO_DIRECT -> config.audioDirectDisplayName()
         }
     }
+}
+
+private enum class RecordingInteraction {
+    CONFIRMED,
+    PUSH_TO_TALK
 }
 
 private fun HistoryItem.withPipelineResult(result: PipelineResult, config: PipelineConfig): HistoryItem = copy(
@@ -818,17 +876,57 @@ private class BubbleIconView(context: Context) : View(context) {
     }
 }
 
+private class PushToTalkTargetView(context: Context) : View(context) {
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(186, 174, 196)
+        style = Paint.Style.STROKE
+        strokeWidth = 4f * resources.displayMetrics.density
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(186, 174, 196)
+        style = Paint.Style.FILL
+    }
+    private var loading = false
+
+    fun setLoading(value: Boolean) {
+        if (loading == value) return
+        loading = value
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val radius = min(width, height) * 0.28f
+        val centerX = width / 2f
+        val centerY = height / 2f
+        if (loading) {
+            ringPaint.color = Color.rgb(28, 24, 32)
+            val inset = min(width, height) / 2f - radius
+            canvas.drawArc(inset, inset, width - inset, height - inset, -80f, 300f, false, ringPaint)
+        } else {
+            ringPaint.color = Color.rgb(186, 174, 196)
+            canvas.drawCircle(centerX, centerY, radius, ringPaint)
+            canvas.drawCircle(centerX, centerY, radius * 0.58f, dotPaint)
+        }
+    }
+}
+
 private class RecordingOverlay(
     context: Context,
     compactSizePx: Int,
     opacity: Float,
     private val onBubbleClick: () -> Unit,
+    private val onPushToTalkStart: () -> Unit,
+    private val onPushToTalkCancel: () -> Unit,
+    private val onPushToTalkSubmit: () -> Unit,
     private val onCancel: () -> Unit,
     private val onSubmit: () -> Unit,
     private val onMove: (Int, Int) -> Unit
 ) : FrameLayout(context) {
     private val collapsed = BubbleIconView(context)
     private val expanded = LinearLayout(context)
+    private val pushToTalkTarget = PushToTalkTargetView(context)
     private val waveform = WaveformView(context)
     private var compactSize = compactSizePx
     private val cancel = circle("×", Color.rgb(183, 178, 190), Color.rgb(28, 24, 32))
@@ -837,9 +935,16 @@ private class RecordingOverlay(
     private var downRawY = 0f
     private var startX = 0
     private var startY = 0
-    private var moved = false
     private var isExpanded = false
+    private var pushToTalk = false
+    private var opensLeft = false
     private var uiState = RecordingUiState.IDLE
+    private val gesture = RecordingGestureController()
+    private val longPressRunnable = Runnable {
+        if (gesture.onLongPressTimeout(System.currentTimeMillis()) == RecordingGestureAction.StartPushToTalk) {
+            onPushToTalkStart()
+        }
+    }
 
     init {
         alpha = opacity
@@ -853,9 +958,7 @@ private class RecordingOverlay(
         addView(expanded, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
         waveform.background = bubbleBg(Color.rgb(194, 184, 205), dp(24).toFloat())
-        expanded.addView(cancel)
-        expanded.addView(waveform)
-        expanded.addView(submit)
+        rebuildExpandedChildren()
         updateExpandedChildSizes()
 
         cancel.setOnClickListener { onCancel() }
@@ -868,18 +971,29 @@ private class RecordingOverlay(
                     downRawY = event.rawY
                     startX = (layoutParams as? WindowManager.LayoutParams)?.x ?: 0
                     startY = (layoutParams as? WindowManager.LayoutParams)?.y ?: 0
-                    moved = false
+                    gesture.onDown(event.rawX, event.rawY, startX, startY, System.currentTimeMillis())
+                    if (!isExpanded) postDelayed(longPressRunnable, PUSH_TO_TALK_LONG_PRESS_MS)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - downRawX
-                    val dy = event.rawY - downRawY
-                    if (abs(dx) > dp(4) || abs(dy) > dp(4)) moved = true
-                    onMove(startX + dx.toInt(), startY + dy.toInt())
+                    when (val action = gesture.onMove(event.rawX, event.rawY, System.currentTimeMillis())) {
+                        is RecordingGestureAction.MoveBubble -> onMove(action.x, action.y)
+                        else -> Unit
+                    }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved && !isExpanded) onBubbleClick()
+                    removeCallbacks(longPressRunnable)
+                    when (gesture.onUp(event.rawX, event.rawY, System.currentTimeMillis())) {
+                        RecordingGestureAction.StartConfirmedRecording -> if (!isExpanded) onBubbleClick()
+                        RecordingGestureAction.SubmitPushToTalk -> onPushToTalkSubmit()
+                        else -> Unit
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    removeCallbacks(longPressRunnable)
+                    if (pushToTalk) onPushToTalkCancel()
                     true
                 }
                 else -> false
@@ -891,6 +1005,21 @@ private class RecordingOverlay(
         isExpanded = expand
         collapsed.visibility = if (expand) GONE else VISIBLE
         expanded.visibility = if (expand) VISIBLE else GONE
+        updateExpandedChildSizes()
+    }
+
+    fun setPushToTalk(value: Boolean) {
+        if (pushToTalk == value) return
+        pushToTalk = value
+        updatePushToTalkAppearance()
+        rebuildExpandedChildren()
+        updateExpandedChildSizes()
+    }
+
+    fun setOpensLeft(value: Boolean) {
+        if (opensLeft == value) return
+        opensLeft = value
+        rebuildExpandedChildren()
     }
 
     fun setCompactSize(sizePx: Int) {
@@ -908,6 +1037,13 @@ private class RecordingOverlay(
     fun setRecordingState(state: RecordingUiState) {
         uiState = state
         waveform.setTranscribing(state == RecordingUiState.TRANSCRIBING)
+        pushToTalkTarget.setLoading(state == RecordingUiState.TRANSCRIBING)
+        updatePushToTalkAppearance()
+        val controlsEnabled = state == RecordingUiState.RECORDING
+        cancel.isEnabled = controlsEnabled
+        submit.isEnabled = controlsEnabled
+        cancel.alpha = if (controlsEnabled) 1f else 0.45f
+        submit.alpha = if (controlsEnabled) 1f else 0.45f
     }
 
     fun updateAmplitude(amplitude: Int, remainingMillis: Long) {
@@ -928,12 +1064,52 @@ private class RecordingOverlay(
         val gap = (compactSize * 0.09f).toInt()
         cancel.setTextSize(TypedValue.COMPLEX_UNIT_PX, compactSize * 0.32f)
         submit.setTextSize(TypedValue.COMPLEX_UNIT_PX, compactSize * 0.32f)
-        cancel.layoutParams = LinearLayout.LayoutParams(control, control)
-        waveform.layoutParams = LinearLayout.LayoutParams(0, control, 1f).apply {
-            marginStart = gap
-            marginEnd = gap
+        if (pushToTalk) {
+            pushToTalkTarget.layoutParams = LinearLayout.LayoutParams(control, control).apply {
+                marginStart = if (opensLeft) gap else 0
+                marginEnd = if (opensLeft) 0 else gap
+            }
+            waveform.layoutParams = LinearLayout.LayoutParams((compactSize * 1.7f).toInt(), control)
+        } else {
+            cancel.layoutParams = LinearLayout.LayoutParams(control, control)
+            waveform.layoutParams = LinearLayout.LayoutParams(0, control, 1f).apply {
+                marginStart = gap
+                marginEnd = gap
+            }
+            submit.layoutParams = LinearLayout.LayoutParams(control, control)
         }
-        submit.layoutParams = LinearLayout.LayoutParams(control, control)
+    }
+
+    private fun rebuildExpandedChildren() {
+        expanded.removeAllViews()
+        if (pushToTalk) {
+            if (opensLeft) {
+                expanded.addView(waveform)
+                expanded.addView(pushToTalkTarget)
+            } else {
+                expanded.addView(pushToTalkTarget)
+                expanded.addView(waveform)
+            }
+        } else {
+            expanded.addView(cancel)
+            expanded.addView(waveform)
+            expanded.addView(submit)
+        }
+    }
+
+    private fun updatePushToTalkAppearance() {
+        if (!pushToTalk) {
+            expanded.background = null
+            waveform.background = bubbleBg(Color.rgb(194, 184, 205), dp(24).toFloat())
+            return
+        }
+        val backgroundColor = if (uiState == RecordingUiState.TRANSCRIBING) {
+            Color.rgb(194, 184, 205)
+        } else {
+            Color.rgb(88, 37, 115)
+        }
+        expanded.background = bubbleBg(backgroundColor, dp(30).toFloat())
+        waveform.background = null
     }
 
     private fun bubbleBg(color: Int, radius: Float) = android.graphics.drawable.GradientDrawable().apply {
@@ -942,6 +1118,10 @@ private class RecordingOverlay(
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        const val PUSH_TO_TALK_LONG_PRESS_MS = 400L
+    }
 }
 
 private class WaveformView(context: Context) : View(context) {
