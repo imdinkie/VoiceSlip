@@ -1,6 +1,5 @@
 package com.example.voiceslip.net
 
-import com.example.voiceslip.data.DEFAULT_OPENROUTER_AUDIO_FAVORITES
 import com.example.voiceslip.data.ModelOption
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,8 +32,8 @@ class OpenRouterClient {
     }
 
     fun listAudioModels(apiKey: String): List<ModelOption> {
-        return fetchModels(apiKey)
-            .filter { it.supportsAudioInput() || it.optString("id") in DEFAULT_OPENROUTER_AUDIO_FAVORITES }
+        return fetchModels(apiKey, outputModalities = "all")
+            .filter { it.supportsOpenRouterAudioToText() }
             .map { it.toModelOption() }
             .sortedBy { it.name.lowercase() }
     }
@@ -77,8 +76,12 @@ class OpenRouterClient {
         )
     }
 
-    private fun fetchModels(apiKey: String): List<JSONObject> {
-        val connection = (URL("https://openrouter.ai/api/v1/models").openConnection() as HttpURLConnection)
+    private fun fetchModels(apiKey: String, outputModalities: String? = null): List<JSONObject> {
+        val url = buildString {
+            append("https://openrouter.ai/api/v1/models")
+            outputModalities?.let { append("?output_modalities=").append(it) }
+        }
+        val connection = (URL(url).openConnection() as HttpURLConnection)
         connection.requestMethod = "GET"
         connection.connectTimeout = 20_000
         connection.readTimeout = 60_000
@@ -197,27 +200,74 @@ private fun JSONObject.supportsText(): Boolean {
     val architecture = optJSONObject("architecture")
     val modality = architecture?.optString("modality").orEmpty().lowercase()
     if (modality.isBlank()) return true
-    return "text" in modality || containsModality("text")
+    return supportsTextOutput()
 }
 
-private fun JSONObject.supportsAudioInput(): Boolean = containsModality("audio")
+internal fun JSONObject.supportsOpenRouterAudioToText(): Boolean =
+    supportsOpenRouterAudioToText(
+        inputModalities = modalityList("input_modalities", "inputModalities"),
+        outputModalities = modalityList("output_modalities", "outputModalities"),
+        fallbackModalities = modalityList("modalities", "modalities"),
+        modalityPath = modalityPath()
+    )
 
-private fun JSONObject.containsModality(modality: String): Boolean {
+internal fun supportsOpenRouterAudioToText(
+    inputModalities: List<String>,
+    outputModalities: List<String>,
+    fallbackModalities: List<String> = emptyList(),
+    modalityPath: String? = null
+): Boolean {
+    val modalityInput = modalityPath?.substringBefore("->").orEmpty()
+    val supportsAudioInput = inputModalities.containsModality("audio") ||
+        modalityInput.containsModalityToken("audio") ||
+        fallbackModalities.containsModality("audio")
+    return supportsAudioInput && supportsOpenRouterTextOutput(outputModalities, fallbackModalities, modalityPath)
+}
+
+private fun JSONObject.supportsTextOutput(): Boolean =
+    supportsOpenRouterTextOutput(
+        outputModalities = modalityList("output_modalities", "outputModalities"),
+        fallbackModalities = modalityList("modalities", "modalities"),
+        modalityPath = modalityPath()
+    )
+
+private fun supportsOpenRouterTextOutput(
+    outputModalities: List<String>,
+    fallbackModalities: List<String>,
+    modalityPath: String?
+): Boolean {
+    val modalityOutput = modalityPath?.substringAfter("->", missingDelimiterValue = "").orEmpty()
+    return outputModalities.containsModality("text") ||
+        modalityOutput.containsModalityToken("text") ||
+        fallbackModalities.containsModality("text")
+}
+
+private fun JSONObject.modalityList(snakeKey: String, camelKey: String): List<String> {
     val architecture = optJSONObject("architecture")
     val targets = listOf(this, architecture).filterNotNull()
-    return targets.any { target ->
-        listOf("input_modalities", "inputModalities", "modalities").any { key ->
-            target.optString(key).lowercase().contains(modality) || target.optJSONArray(key).containsString(modality)
-        } || target.optString("modality").lowercase().contains(modality)
-    }
+    return targets.flatMap { target ->
+        listOf(snakeKey, camelKey).flatMap { key ->
+            target.optJSONArray(key).toStringList() + target.optString(key).splitModalityTokens()
+        }
+    }.filter { it.isNotBlank() }
 }
 
-private fun JSONArray?.containsString(value: String): Boolean {
-    if (this == null) return false
-    for (index in 0 until length()) {
-        if (optString(index).equals(value, ignoreCase = true)) return true
-    }
-    return false
+private fun JSONObject.modalityPath(): String? =
+    optJSONObject("architecture")?.optString("modality")?.takeIf { it.isNotBlank() }
+        ?: optString("modality").takeIf { it.isNotBlank() }
+
+private fun String.containsModalityToken(value: String): Boolean =
+    splitModalityTokens().any { it.equals(value, ignoreCase = true) }
+
+private fun List<String>.containsModality(value: String): Boolean =
+    any { it.equals(value, ignoreCase = true) }
+
+private fun String.splitModalityTokens(): List<String> =
+    split('+', ',', ' ', '\t', '\n', '\r').map { it.trim() }.filter { it.isNotBlank() }
+
+private fun JSONArray?.toStringList(): List<String> {
+    if (this == null) return emptyList()
+    return (0 until length()).mapNotNull { optString(it).takeIf { value -> value.isNotBlank() } }
 }
 
 private fun openRouterAudioFormat(file: File): String = when (file.extension.lowercase()) {

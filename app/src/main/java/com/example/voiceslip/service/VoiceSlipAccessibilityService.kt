@@ -29,7 +29,6 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.TextAttribute
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -133,8 +132,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val activePackage = activeApplicationPackage()
         if (activePackage == packageName) return false
         val node = findFocusedEditableNode()
-        if (node != null && isSensitiveNode(node)) return false
-        return true
+        val secretField = (node != null && isSensitiveNode(node)) || accessibilityInputMethod?.isSensitiveEditor() == true
+        return shouldShowBubbleForField(secretField = secretField)
     }
 
     private fun hasInputMethodWindow(): Boolean {
@@ -190,11 +189,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 
     private fun isSensitiveInputType(inputType: Int): Boolean {
-        val variation = inputType and InputType.TYPE_MASK_VARIATION
-        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
-            variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        return isSecretInputType(inputType)
     }
 
     private fun showOverlay(expanded: Boolean) {
@@ -763,21 +758,26 @@ private class VoiceSlipInputMethod(service: VoiceSlipAccessibilityService) : Inp
 
     fun isSensitiveEditor(): Boolean {
         val editorInfo = currentInputEditorInfo ?: return false
-        return editorInfo.inputType.isSensitiveInputType() ||
-            editorInfo.imeOptions.hasPrivateImeFlag()
+        return isSecretInputType(editorInfo.inputType)
     }
 
-    private fun Int.isSensitiveInputType(): Boolean {
-        val variation = this and InputType.TYPE_MASK_VARIATION
-        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
-            variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-    }
+}
 
-    private fun Int.hasPrivateImeFlag(): Boolean {
-        return this and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
-    }
+internal fun shouldShowBubbleForField(
+    secretField: Boolean
+): Boolean = !secretField
+
+internal fun shouldBlockInsertionForField(
+    secretAccessibilityNode: Boolean,
+    secretInputEditor: Boolean
+): Boolean = secretAccessibilityNode || secretInputEditor
+
+internal fun isSecretInputType(inputType: Int): Boolean {
+    val textVariation = inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)
+    return textVariation == (InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD) ||
+        textVariation == (InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) ||
+        textVariation == (InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD) ||
+        textVariation == (InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD)
 }
 
 private enum class RecordingUiState {

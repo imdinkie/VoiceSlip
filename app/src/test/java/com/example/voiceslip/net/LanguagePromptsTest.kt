@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.example.voiceslip.data.DEFAULT_CLEANUP_POLICY
 
 class LanguagePromptsTest {
     @Test
@@ -72,5 +73,41 @@ class LanguagePromptsTest {
         assertTrue(systemPrompt.contains("Entry1"))
         assertTrue(systemPrompt.contains("Entry125"))
         assertFalse(systemPrompt.contains("Entry126"))
+    }
+
+    @Test
+    fun defaultCleanupPolicyDefinesContextualSpokenPunctuation() {
+        val prompt = DEFAULT_CLEANUP_POLICY
+
+        listOf(
+            "period",
+            "comma",
+            "question mark",
+            "exclamation mark",
+            "colon",
+            "semicolon",
+            "quote",
+            "open quote",
+            "close quote",
+            "newline",
+            "new paragraph"
+        ).forEach { example ->
+            assertTrue("Missing $example", prompt.contains(example))
+        }
+        assertTrue(prompt.contains("contextually"))
+        assertTrue(prompt.contains("literal text"))
+    }
+
+    @Test
+    fun postProcessingPromptIncludesUpdatedCleanupPolicy() {
+        val systemPrompt = buildPostProcessingSystemPrompt(
+            detectedLanguage = "en",
+            dictionaryTerms = emptyList(),
+            cleanupPolicy = DEFAULT_CLEANUP_POLICY,
+            preserveSpokenLanguage = true
+        )
+
+        assertTrue(systemPrompt.contains("Convert spoken punctuation contextually"))
+        assertTrue(systemPrompt.contains("Preserve punctuation words"))
     }
 }

@@ -258,7 +258,7 @@ interface VoiceSlipDao {
         EngineDictionaryRoutingEntity::class,
         PromptSettingEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 abstract class VoiceSlipDatabase : RoomDatabase() {
@@ -274,7 +274,7 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                     VoiceSlipDatabase::class.java,
                     "voiceslip_v3.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_5, MIGRATION_4_5)
                     .allowMainThreadQueries()
                     .build()
                     .also { instance = it }
@@ -333,6 +333,77 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+            }
+        }
+
+        private val MIGRATION_3_5 = object : Migration(3, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) = Unit
+        }
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pipeline_config RENAME TO pipeline_config_old")
+                db.execSQL(
+                    """
+                    CREATE TABLE pipeline_config (
+                        id TEXT NOT NULL,
+                        mode TEXT NOT NULL,
+                        transcriptionEngineKind TEXT NOT NULL DEFAULT 'BUILT_IN',
+                        transcriptionEngine TEXT NOT NULL,
+                        mistralTranscriptionEngine TEXT NOT NULL DEFAULT '',
+                        groqTranscriptionEngine TEXT NOT NULL DEFAULT '',
+                        openRouterAudioTranscriptionModel TEXT NOT NULL DEFAULT '',
+                        audioDirectEngineKind TEXT NOT NULL DEFAULT 'BUILT_IN',
+                        audioDirectEngine TEXT NOT NULL,
+                        mistralAudioDirectEngine TEXT NOT NULL DEFAULT '',
+                        postProcessingProvider TEXT NOT NULL,
+                        postProcessingModel TEXT NOT NULL,
+                        groqPostProcessingModel TEXT NOT NULL DEFAULT '',
+                        openRouterPostProcessingModel TEXT NOT NULL DEFAULT '',
+                        openRouterAudioDirectModel TEXT NOT NULL DEFAULT '',
+                        PRIMARY KEY(id)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO pipeline_config (
+                        id,
+                        mode,
+                        transcriptionEngineKind,
+                        transcriptionEngine,
+                        mistralTranscriptionEngine,
+                        groqTranscriptionEngine,
+                        openRouterAudioTranscriptionModel,
+                        audioDirectEngineKind,
+                        audioDirectEngine,
+                        mistralAudioDirectEngine,
+                        postProcessingProvider,
+                        postProcessingModel,
+                        groqPostProcessingModel,
+                        openRouterPostProcessingModel,
+                        openRouterAudioDirectModel
+                    )
+                    SELECT
+                        id,
+                        mode,
+                        transcriptionEngineKind,
+                        transcriptionEngine,
+                        mistralTranscriptionEngine,
+                        groqTranscriptionEngine,
+                        openRouterAudioTranscriptionModel,
+                        audioDirectEngineKind,
+                        audioDirectEngine,
+                        mistralAudioDirectEngine,
+                        postProcessingProvider,
+                        postProcessingModel,
+                        groqPostProcessingModel,
+                        openRouterPostProcessingModel,
+                        openRouterAudioDirectModel
+                    FROM pipeline_config_old
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE pipeline_config_old")
             }
         }
     }

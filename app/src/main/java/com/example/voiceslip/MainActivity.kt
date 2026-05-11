@@ -1032,10 +1032,22 @@ private fun PostProcessingPickerScreen(
     BackHandler { onBack() }
     var pickerState by remember { mutableStateOf(initialPostProcessingPickerState(config)) }
     val activeProvider = pickerState.activeProvider
-    val models = if (activeProvider == PostProcessingProvider.GROQ) groqModels else openRouterModels
-    val favoriteIds = if (activeProvider == PostProcessingProvider.GROQ) groqFavoriteIds else openRouterFavoriteIds
+    val models = when (activeProvider) {
+        PostProcessingProvider.GROQ -> groqModels
+        PostProcessingProvider.OPENROUTER -> openRouterModels
+        PostProcessingProvider.NONE -> emptyList()
+    }
+    val favoriteIds = when (activeProvider) {
+        PostProcessingProvider.GROQ -> groqFavoriteIds
+        PostProcessingProvider.OPENROUTER -> openRouterFavoriteIds
+        PostProcessingProvider.NONE -> emptyList()
+    }
     val selectedModel = selectedPostProcessingModel(config, activeProvider)
-    val hasKey = if (activeProvider == PostProcessingProvider.GROQ) hasGroqKey else hasOpenRouterKey
+    val hasKey = when (activeProvider) {
+        PostProcessingProvider.GROQ -> hasGroqKey
+        PostProcessingProvider.OPENROUTER -> hasOpenRouterKey
+        PostProcessingProvider.NONE -> true
+    }
     val rows = remember(models, favoriteIds, selectedModel, pickerState.query, activeProvider) {
         modelRows(models, favoriteIds, selectedModel, pickerState.query, fallbackProvider = activeProvider.label)
     }
@@ -1067,7 +1079,11 @@ private fun PostProcessingPickerScreen(
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedButton(
-                    onClick = if (activeProvider == PostProcessingProvider.GROQ) onRefreshGroq else onRefreshOpenRouter,
+                    onClick = when (activeProvider) {
+                        PostProcessingProvider.GROQ -> onRefreshGroq
+                        PostProcessingProvider.OPENROUTER -> onRefreshOpenRouter
+                        PostProcessingProvider.NONE -> onRefreshGroq
+                    },
                     enabled = hasKey
                 ) { Text("Refresh ${activeProvider.label}") }
                 modelStatus?.let { Text(it, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant) }

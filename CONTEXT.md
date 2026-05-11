@@ -102,7 +102,7 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - A **Model Picker** chooses one model for one **Dictation Pipeline** step.
 - A **Provider Group** belongs inside a **Model Picker**; it is not a separate pipeline decision.
 - Selecting a model in a **Model Picker** changes the active model for that pipeline step; toggling a **Favorite Model** does not.
-- **Favorite Models** are scoped to a provider catalog and role family: OpenRouter audio favorites are shared by transcription and audio-direct model pickers, while post-processing favorites are separate for Mistral, Groq, and OpenRouter.
+- **Favorite Models** are scoped to a provider catalog and role family: OpenRouter audio favorites are shared by transcription and audio-direct model pickers, while post-processing favorites are separate for Groq and OpenRouter.
 - **Dictionary During Transcription** may transform **Dictionary Entries** into provider-specific **Bias Tokens** before sending them to a transcription provider.
 - Cleanup always receives the full set of **Dictionary Entries**, regardless of **Dictionary During Transcription**.
 - **Dictionary Entry Priority** controls dictionary display order and the order in which dictionary prompt constraints are built.
@@ -115,7 +115,7 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - **Floating Bubble Placement** should survive screen rotation by preserving edge affinity and relative vertical position, not absolute pixels.
 - A **Target App** may resolve from the focused application window, active root, focused editable node, or input editor package; if none is high-confidence, VoiceSlip should treat it as unknown.
 - A **Secret Field** always prevents VoiceSlip from showing the floating bubble or inserting dictated text.
-- A **Private Editor** may allow the floating bubble based on user preference; once recording starts, it should not block insertion by itself.
+- A **Private Editor** does not hide the floating bubble or block insertion by itself.
 
 ## Example dialogue
 
@@ -126,7 +126,7 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 > **Domain expert:** "No. The user chooses the concrete model in a **Model Picker**; Groq and OpenRouter are **Provider Groups** inside that choice."
 
 > **Dev:** "Should **Private Editors** be treated as sensitive fields?"
-> **Domain expert:** "No. Only **Secret Fields** are always blocked; **Private Editors** control whether the bubble appears before recording."
+> **Domain expert:** "No. Only **Secret Fields** are always blocked; **Private Editors** should still allow dictation."
 
 ## Flagged ambiguities
 
