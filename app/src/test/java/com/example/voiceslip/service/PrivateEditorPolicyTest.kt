@@ -22,6 +22,16 @@ class PrivateEditorPolicyTest {
     }
 
     @Test
+    fun focusedEditableNodeUsesVerifiableInsertionBeforeInputMethod() {
+        assertFalse(shouldTryAccessibilityInputMethodBeforeFocusedNode(hasFocusedEditableNode = true))
+    }
+
+    @Test
+    fun missingFocusedEditableNodeMayUseInputMethodBeforeClipboardFallback() {
+        assertTrue(shouldTryAccessibilityInputMethodBeforeFocusedNode(hasFocusedEditableNode = false))
+    }
+
+    @Test
     fun passwordInputTypeIsSecretButPrivateImeFlagIsNot() {
         assertTrue(isSecretInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD))
         assertFalse(isSecretInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI))

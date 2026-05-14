@@ -628,14 +628,43 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             return InsertionResult.FAILED_SENSITIVE_FIELD
         }
 
-        accessibilityInputMethod?.let { inputMethod ->
-            if (inputMethod.isSensitiveEditor()) {
-                Log.d(TAG, "Insertion blocked: sensitive input editor")
-                return InsertionResult.FAILED_SENSITIVE_FIELD
+        val inputMethod = accessibilityInputMethod
+        if (inputMethod?.isSensitiveEditor() == true) {
+            Log.d(TAG, "Insertion blocked: sensitive input editor")
+            return InsertionResult.FAILED_SENSITIVE_FIELD
+        }
+
+        val tryInputMethodFirst = shouldTryAccessibilityInputMethodBeforeFocusedNode(node != null)
+        if (tryInputMethodFirst) {
+            inputMethod?.let {
+                if (it.commitText(text)) {
+                    Log.d(TAG, "Insertion attempted via accessibility input method")
+                    return InsertionResult.INSERTED_VIA_INPUT_METHOD
+                }
             }
-            if (inputMethod.commitText(text)) {
-                Log.d(TAG, "Insertion succeeded via accessibility input method")
-                return InsertionResult.INSERTED_VIA_INPUT_METHOD
+        }
+
+        if (node != null) {
+            if (insertDirectly(node, text)) {
+                Log.d(TAG, "Insertion succeeded via ACTION_SET_TEXT")
+                return InsertionResult.INSERTED_DIRECT
+            }
+
+            if (node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+                copyToClipboard(text)
+                if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+                    Log.d(TAG, "Insertion succeeded via clipboard paste fallback")
+                    return InsertionResult.INSERTED_VIA_CLIPBOARD
+                }
+            }
+        }
+
+        if (!tryInputMethodFirst) {
+            inputMethod?.let {
+                if (it.commitText(text)) {
+                    Log.d(TAG, "Insertion attempted via accessibility input method")
+                    return InsertionResult.INSERTED_VIA_INPUT_METHOD
+                }
             }
         }
 
@@ -643,19 +672,6 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             copyToClipboard(text)
             Log.d(TAG, "Insertion copied to clipboard: no target node or input method window")
             return InsertionResult.COPIED_NO_TARGET
-        }
-
-        if (insertDirectly(node, text)) {
-            Log.d(TAG, "Insertion succeeded via ACTION_SET_TEXT")
-            return InsertionResult.INSERTED_DIRECT
-        }
-
-        if (node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-            copyToClipboard(text)
-            if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-                Log.d(TAG, "Insertion succeeded via clipboard paste fallback")
-                return InsertionResult.INSERTED_VIA_CLIPBOARD
-            }
         }
 
         Log.d(TAG, "Insertion failed")
@@ -804,12 +820,7 @@ private class VoiceSlipInputMethod(service: VoiceSlipAccessibilityService) : Inp
         if (!currentInputStarted) return false
         val connection = currentInputConnection ?: return false
         return runCatching {
-            if (Build.VERSION.SDK_INT >= 33) {
-                connection.commitText(text, 1, null as TextAttribute?)
-            } else {
-                @Suppress("DEPRECATION")
-                connection.commitText(text, 1, null)
-            }
+            connection.commitText(text, 1, null as TextAttribute?)
             true
         }.getOrDefault(false)
     }
@@ -829,6 +840,9 @@ internal fun shouldBlockInsertionForField(
     secretAccessibilityNode: Boolean,
     secretInputEditor: Boolean
 ): Boolean = secretAccessibilityNode || secretInputEditor
+
+internal fun shouldTryAccessibilityInputMethodBeforeFocusedNode(hasFocusedEditableNode: Boolean): Boolean =
+    !hasFocusedEditableNode
 
 internal fun isSecretInputType(inputType: Int): Boolean {
     val textVariation = inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)
