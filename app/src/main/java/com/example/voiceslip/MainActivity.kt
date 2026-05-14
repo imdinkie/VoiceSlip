@@ -136,6 +136,13 @@ import java.util.Date
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
+private const val SETUP_TAB_INDEX = 0
+private const val HISTORY_TAB_INDEX = 1
+private const val MODELS_TAB_INDEX = 2
+private const val STYLE_TAB_INDEX = 3
+private const val DICTIONARY_TAB_INDEX = 4
+private val VOICESLIP_TABS = listOf("Setup", "History", "Models", "Style", "Dictionary")
+
 class MainActivity : ComponentActivity() {
     private lateinit var repository: VoiceSlipRepository
     private lateinit var secretStore: SecretStore
@@ -255,8 +262,8 @@ private fun VoiceSlipApp(
     onCopy: (String) -> Unit
 ) {
     val context = LocalContext.current
-    var selectedTab by remember { mutableIntStateOf(0) }
     var refreshTick by remember { mutableIntStateOf(0) }
+    var resumeTick by remember { mutableIntStateOf(0) }
     var mistralKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.MISTRAL).orEmpty()) }
     var groqKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.GROQ).orEmpty()) }
     var openRouterKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
@@ -271,6 +278,13 @@ private fun VoiceSlipApp(
     var haptics by remember { mutableStateOf(repository.getHapticsEnabled()) }
     var bubbleSizeDp by remember { mutableIntStateOf(repository.getBubbleSizeDp()) }
     var bubbleOpacityPercent by remember { mutableIntStateOf(repository.getBubbleOpacityPercent()) }
+    var selectedTab by remember {
+        mutableIntStateOf(
+            if (initialSetupStatus(context, repository, secretStore).ready) HISTORY_TAB_INDEX else SETUP_TAB_INDEX
+        )
+    }
+    var historyScrollRequest by remember { mutableIntStateOf(0) }
+    var lastViewedHistoryTopId by remember { mutableStateOf(repository.listHistory().firstOrNull()?.id) }
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         refreshTick++
     }
@@ -296,7 +310,10 @@ private fun VoiceSlipApp(
     DisposableEffect(context) {
         val lifecycleOwner = context as? LifecycleOwner
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refreshTick++
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshTick++
+                resumeTick++
+            }
         }
         lifecycleOwner?.lifecycle?.addObserver(observer)
         onDispose {
@@ -313,6 +330,15 @@ private fun VoiceSlipApp(
                 ProviderId.OPENROUTER to openRouterKey
             )
         )
+    }
+    LaunchedEffect(selectedTab, resumeTick) {
+        if (selectedTab == HISTORY_TAB_INDEX) {
+            val topId = repository.listHistory().firstOrNull()?.id
+            if (topId != null && topId != lastViewedHistoryTopId) {
+                historyScrollRequest++
+            }
+            lastViewedHistoryTopId = topId
+        }
     }
 
     Scaffold(
@@ -344,7 +370,7 @@ private fun VoiceSlipApp(
                     )
                 }
                 ScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 0.dp) {
-                    listOf("Setup", "Models", "Style", "Dictionary", "History").forEachIndexed { index, title ->
+                    VOICESLIP_TABS.forEachIndexed { index, title ->
                         Tab(
                             selected = selectedTab == index,
                             onClick = { selectedTab = index },
@@ -357,7 +383,7 @@ private fun VoiceSlipApp(
     ) { padding ->
         Surface(Modifier.fillMaxSize().padding(padding)) {
             when (selectedTab) {
-                0 -> SetupScreen(
+                SETUP_TAB_INDEX -> SetupScreen(
                     mistralKey = mistralKey,
                     groqKey = groqKey,
                     openRouterKey = openRouterKey,
@@ -398,7 +424,13 @@ private fun VoiceSlipApp(
                         if (Build.VERSION.SDK_INT >= 33) notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
                 )
-                1 -> ModelsScreen(
+                HISTORY_TAB_INDEX -> HistoryScreen(
+                    repository = repository,
+                    scrollToTopRequest = historyScrollRequest,
+                    onRetry = onRetry,
+                    onCopy = onCopy
+                )
+                MODELS_TAB_INDEX -> ModelsScreen(
                     config = pipelineConfig,
                     repository = repository,
                     languageHints = languageHints,
@@ -469,13 +501,27 @@ private fun VoiceSlipApp(
                         }.start()
                     }
                 )
-                2 -> StyleScreen(repository = repository)
-                3 -> DictionaryScreen(repository = repository, config = pipelineConfig)
-                4 -> HistoryScreen(repository = repository, onRetry = onRetry, onCopy = onCopy)
+                STYLE_TAB_INDEX -> StyleScreen(repository = repository)
+                DICTIONARY_TAB_INDEX -> DictionaryScreen(repository = repository, config = pipelineConfig)
             }
         }
     }
 }
+
+private fun initialSetupStatus(
+    context: Context,
+    repository: VoiceSlipRepository,
+    secretStore: SecretStore
+): SetupStatus =
+    currentSetupStatus(
+        context = context,
+        config = repository.getPipelineConfig(),
+        keys = mapOf(
+            ProviderId.MISTRAL to secretStore.getApiKey(ProviderId.MISTRAL).orEmpty(),
+            ProviderId.GROQ to secretStore.getApiKey(ProviderId.GROQ).orEmpty(),
+            ProviderId.OPENROUTER to secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()
+        )
+    )
 
 @Composable
 private fun SetupScreen(
@@ -2474,6 +2520,7 @@ private fun DictionaryWarning(repository: VoiceSlipRepository, config: PipelineC
 @Composable
 private fun HistoryScreen(
     repository: VoiceSlipRepository,
+    scrollToTopRequest: Int,
     onRetry: (HistoryItem) -> Unit,
     onCopy: (String) -> Unit
 ) {
@@ -2481,7 +2528,13 @@ private fun HistoryScreen(
     var pendingClear by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<HistoryItem?>(null) }
     var detailItem by remember { mutableStateOf<HistoryItem?>(null) }
+    val listState = rememberLazyListState()
     val appIconCache = remember(items) { repository.listInstalledApps().associateBy { it.packageName } }
+    LaunchedEffect(scrollToTopRequest) {
+        if (scrollToTopRequest > 0) {
+            listState.scrollToItem(0)
+        }
+    }
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(1200)
@@ -2494,7 +2547,7 @@ private fun HistoryScreen(
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = { pendingClear = true }) { Text("Clear") }
         }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(items, key = { it.id }) { item ->
                 HistoryCard(
                     item = item,

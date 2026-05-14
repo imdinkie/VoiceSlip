@@ -138,7 +138,9 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - **Push to Talk** should start only after an intentional hold; accidental near-immediate releases should not create a submitted dictation.
 - **Push to Talk** has no explicit cancel control once active; releasing submits unless the recording was below the accidental-hold threshold.
 - A **Submitted Dictation** keeps the floating bubble visible until transcription, cleanup, and insertion or copy have finished.
+- A new dictation should be visible at the top of History when VoiceSlip is reopened, even before it becomes a **Retained Dictation**.
 - A canceled or accidental capture is not a **Retained Dictation** and should be removed from History while its recording file is deleted.
+- Once setup is complete, History is the primary review surface for **Retained Dictations** when opening VoiceSlip.
 - Orphaned recording files that are not referenced by **Retained Dictations** should be cleaned up after they are old enough to avoid active-recording races.
 - Screen-awake behavior belongs to active audio capture, not the later **Submitted Dictation** processing window.
 - A **Target App** may resolve from the focused application window, active root, focused editable node, or input editor package; if none is high-confidence, VoiceSlip should treat it as unknown.
@@ -170,5 +172,7 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - "Casual style" could imply paraphrasing into more casual vocabulary. Resolved: built-in **Style Presets** are formatting and tone constraints, not paraphrasing instructions.
 - "Bubble position" could mean live overlay pixels or saved user placement. Resolved: **Floating Bubble Placement** is persisted as edge-relative intent; raw coordinates are only a rendering detail.
 - "Push to talk" could imply a separate recording mode. Resolved: **Push to Talk** is a secondary hold gesture available alongside tap-to-record.
+- "Default place" could mean always opening settings or always opening recent output. Resolved: after setup is complete, VoiceSlip should open on History; incomplete setup still opens on Setup.
+- "New history entry" could mean a completed result or any newly visible dictation. Resolved: a dictation counts as new by id when it first appears in History; later status updates to that same id should not force another scroll.
 - "Unknown app" could be resolved using the last seen foreground app. Rejected: **Target App** must come from high-confidence current editor/window signals to avoid applying the wrong style.
 - "Sensitive field" was used for both password-class editors and no-personalized-learning editors. Resolved: use **Secret Field** for password/PIN/OTP/CVV/card input and **Private Editor** for no-personalized-learning fields such as browser address bars.
