@@ -609,6 +609,7 @@ private val seededPackages = mapOf(
     "com.discord" to CATEGORY_PERSONAL,
     "com.instagram.android" to CATEGORY_PERSONAL,
     "com.instagram.barcelona" to CATEGORY_PERSONAL,
+    "com.snapchat.android" to CATEGORY_PERSONAL,
     "com.twitter.android" to CATEGORY_PERSONAL,
     "com.reddit.frontpage" to CATEGORY_PERSONAL,
     "com.Slack" to CATEGORY_WORK,

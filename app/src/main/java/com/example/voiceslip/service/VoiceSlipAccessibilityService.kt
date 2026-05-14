@@ -680,16 +680,26 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
 
     private fun insertDirectly(node: AccessibilityNodeInfo, text: String): Boolean {
         if (!node.supportsAction(AccessibilityNodeInfo.ACTION_SET_TEXT)) return false
-        val currentText = node.text?.toString() ?: return false
+        val currentText = node.text?.toString().orEmpty()
         val selectionStart = node.textSelectionStart
         val selectionEnd = node.textSelectionEnd
-        if (selectionStart < 0 || selectionEnd < 0) return false
+        if (selectionStart < 0 || selectionEnd < 0) {
+            return if (shouldSetTextWithoutSelection(currentText, node.hintText?.toString())) {
+                setNodeText(node, text)
+            } else {
+                false
+            }
+        }
 
         val start = min(selectionStart, selectionEnd).coerceIn(0, currentText.length)
         val end = max(selectionStart, selectionEnd).coerceIn(0, currentText.length)
         val updatedText = currentText.substring(0, start) + text + currentText.substring(end)
+        return setNodeText(node, updatedText)
+    }
+
+    private fun setNodeText(node: AccessibilityNodeInfo, text: String): Boolean {
         val arguments = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, updatedText)
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
     }
@@ -843,6 +853,9 @@ internal fun shouldBlockInsertionForField(
 
 internal fun shouldTryAccessibilityInputMethodBeforeFocusedNode(hasFocusedEditableNode: Boolean): Boolean =
     !hasFocusedEditableNode
+
+internal fun shouldSetTextWithoutSelection(currentText: String, hintText: String?): Boolean =
+    currentText.isEmpty() || currentText == hintText
 
 internal fun isSecretInputType(inputType: Int): Boolean {
     val textVariation = inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)

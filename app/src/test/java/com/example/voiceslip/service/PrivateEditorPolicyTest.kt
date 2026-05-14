@@ -32,6 +32,16 @@ class PrivateEditorPolicyTest {
     }
 
     @Test
+    fun hintOnlyTextCanUseSetTextWithoutSelection() {
+        assertTrue(shouldSetTextWithoutSelection(currentText = "Send chat", hintText = "Send chat"))
+    }
+
+    @Test
+    fun realTextDoesNotGetReplacedWhenSelectionIsUnavailable() {
+        assertFalse(shouldSetTextWithoutSelection(currentText = "Draft message", hintText = "Send chat"))
+    }
+
+    @Test
     fun passwordInputTypeIsSecretButPrivateImeFlagIsNot() {
         assertTrue(isSecretInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD))
         assertFalse(isSecretInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI))
