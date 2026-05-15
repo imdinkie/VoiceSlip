@@ -44,6 +44,10 @@ _Avoid_: provider setting when referring to model selection
 A model marked for easier rediscovery inside a provider catalog, without making it the active pipeline model.
 _Avoid_: selected model
 
+**Predicted Route**:
+The provider endpoint VoiceSlip expects OpenRouter to prefer for a model under an explicit routing policy, shown for comparison but not guaranteed at request time.
+_Avoid_: selected provider
+
 **Dictionary During Transcription**:
 The user-facing control for whether saved dictionary entries are sent to the transcription step when the selected model supports them.
 _Avoid_: dictionary routing in UI labels
@@ -121,7 +125,18 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - A detected language can support **Language Preservation** after transcription, but it is distinct from a **Language Hint**.
 - A **Model Picker** chooses one model for one **Dictation Pipeline** step.
 - A **Provider Group** belongs inside a **Model Picker**; it is not a separate pipeline decision.
+- OpenRouter provider sorting is configured inside an OpenRouter **Provider Group** and applies to all OpenRouter requests, but remains a routing policy rather than part of the selected model identity.
+- OpenRouter reasoning effort is configured inside an OpenRouter **Provider Group** and applies to OpenRouter requests only when the selected model supports reasoning.
+- Shared OpenRouter settings should be reachable from every OpenRouter **Provider Group** where OpenRouter models can be chosen.
+- Model rows inside a single active **Provider Group** should not repeat that provider name unless they need to distinguish an inactive saved model.
 - Selecting a model in a **Model Picker** changes the active model for that pipeline step; toggling a **Favorite Model** does not.
+- A **Predicted Route** may summarize p50 price, throughput, and latency for OpenRouter model rows when an explicit OpenRouter provider sort is selected.
+- When OpenRouter default routing is selected, VoiceSlip should show model-level lowest price rather than guessing a **Predicted Route**.
+- OpenRouter route performance summaries use p50 metrics; missing route metrics should be shown as unavailable rather than hidden.
+- OpenRouter endpoint details should be cached separately from model catalogs because endpoint metadata is fetched per model and has different freshness.
+- OpenRouter reasoning output should be excluded from model responses so reasoning text does not become insertable dictation output.
+- In compact model rows with both details and favorite actions, the details action appears left of the star and the star remains the far-right action.
+- Model details should open from an explicit details action, not from long-press or row expansion, and should appear as a bottom sheet only when meaningful provider metadata is available.
 - **Favorite Models** are scoped to a provider catalog and role family: OpenRouter audio favorites are shared by transcription and audio-direct model pickers, while post-processing favorites are separate for Groq and OpenRouter.
 - **Dictionary During Transcription** may transform **Dictionary Entries** into provider-specific **Bias Tokens** before sending them to a transcription provider.
 - Cleanup always receives the full set of **Dictionary Entries**, regardless of **Dictionary During Transcription**.
@@ -163,6 +178,10 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 
 - "Pipeline preview" was used to mean both the whole inspection dialog and the exact prompt sent to a model. Resolved: **Pipeline Preview** is the whole dialog; model input must be labeled as prompt or system/user prompt.
 - "Manage OpenRouter audio models" was used for both selecting an active model and maintaining favorites. Resolved: active model selection belongs in a **Model Picker**; favorites are supporting controls inside the OpenRouter **Provider Group**.
+- "Sort OpenRouter models by price, throughput, or latency" could imply changing model list order. Resolved: the setting controls OpenRouter provider routing for requests; model list display may show metadata but model identity stays unchanged.
+- "Provider that would be selected" sounded deterministic. Resolved: use **Predicted Route** only for explicit OpenRouter routing policies because OpenRouter may still reroute at request time; do not predict default routing.
+- "OpenRouter · model-id" row subtitles repeated the active **Provider Group** and caused avoidable wrapping. Resolved: omit the provider name in active provider-group rows and reserve it for inactive saved-model labels.
+- "Long-press for model details" was discoverable only by convention and expanded dense picker rows. Resolved: use an explicit details action that opens a dialog or sheet.
 - "Clicking a model" was ambiguous between inspecting, favoriting, and selecting. Resolved: tapping the model row selects it and returns; tapping the star only toggles **Favorite Model** state.
 - "Dictionary routing" sounded like the dictionary might be routed away from cleanup. Resolved: UI should say **Dictionary During Transcription**; cleanup always uses all **Dictionary Entries**.
 - "Terms included" was ambiguous after Mistral splits multi-word entries. Resolved: distinguish saved **Dictionary Entries** from provider-specific **Bias Tokens**.

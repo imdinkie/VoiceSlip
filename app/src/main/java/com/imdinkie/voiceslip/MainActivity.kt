@@ -26,6 +26,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
@@ -34,6 +36,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,9 +52,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -66,10 +71,21 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Percent
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -87,6 +103,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -104,6 +121,9 @@ import com.imdinkie.voiceslip.data.BUBBLE_SIZE_MIN_DP
 import com.imdinkie.voiceslip.data.DictionaryEntry
 import com.imdinkie.voiceslip.data.HistoryItem
 import com.imdinkie.voiceslip.data.ModelOption
+import com.imdinkie.voiceslip.data.OpenRouterEndpointDetails
+import com.imdinkie.voiceslip.data.OpenRouterProviderSort
+import com.imdinkie.voiceslip.data.OpenRouterReasoningEffort
 import com.imdinkie.voiceslip.data.PipelineConfig
 import com.imdinkie.voiceslip.data.PipelineMode
 import com.imdinkie.voiceslip.data.PostProcessingProvider
@@ -191,7 +211,15 @@ class MainActivity : ComponentActivity() {
                     val plan = repository.dictionaryPlanForTranscription(config, dictionary)
                     dictionary.take(plan.includedTerms)
                 }
-                val result = PipelineExecutor { secretStore.getApiKey(it) }.execute(
+                val result = PipelineExecutor(
+                    keyProvider = { secretStore.getApiKey(it) },
+                    openRouterProviderSort = { repository.getOpenRouterProviderSort() },
+                    openRouterReasoningEffort = { repository.getOpenRouterReasoningEffort() },
+                    openRouterModelLookup = { modelId ->
+                        (repository.getCachedModels(ProviderId.OPENROUTER) + repository.getCachedOpenRouterAudioModels())
+                            .firstOrNull { it.id == modelId }
+                    }
+                ).execute(
                     config = config,
                     audioFile = File(item.audioPath),
                     dictionaryTerms = dictionary,
@@ -273,6 +301,8 @@ private fun VoiceSlipApp(
     var groqModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.GROQ)) }
     var openRouterModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.OPENROUTER)) }
     var openRouterAudioModels by remember { mutableStateOf(repository.getCachedOpenRouterAudioModels()) }
+    var openRouterProviderSort by remember { mutableStateOf(repository.getOpenRouterProviderSort()) }
+    var openRouterReasoningEffort by remember { mutableStateOf(repository.getOpenRouterReasoningEffort()) }
     var modelStatus by remember { mutableStateOf<String?>(null) }
     var appEnabled by remember { mutableStateOf(repository.getAppEnabled()) }
     var haptics by remember { mutableStateOf(repository.getHapticsEnabled()) }
@@ -302,6 +332,8 @@ private fun VoiceSlipApp(
         groqModels = repository.getCachedModels(ProviderId.GROQ)
         openRouterModels = repository.getCachedModels(ProviderId.OPENROUTER)
         openRouterAudioModels = repository.getCachedOpenRouterAudioModels()
+        openRouterProviderSort = repository.getOpenRouterProviderSort()
+        openRouterReasoningEffort = repository.getOpenRouterReasoningEffort()
         appEnabled = repository.getAppEnabled()
         haptics = repository.getHapticsEnabled()
         bubbleSizeDp = repository.getBubbleSizeDp()
@@ -339,6 +371,19 @@ private fun VoiceSlipApp(
             }
             lastViewedHistoryTopId = topId
         }
+    }
+
+    fun refreshOpenRouterEndpointDetails(modelIds: List<String>) {
+        val cleanIds = modelIds.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (cleanIds.isEmpty()) return
+        Thread {
+            cleanIds.forEach { modelId ->
+                runCatching {
+                    OpenRouterClient().endpointDetails(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty(), modelId)
+                }.onSuccess { repository.setCachedOpenRouterEndpointDetails(it) }
+            }
+            (context as? ComponentActivity)?.runOnUiThread { refreshTick++ }
+        }.start()
     }
 
     Scaffold(
@@ -438,6 +483,8 @@ private fun VoiceSlipApp(
                     groqModels = groqModels,
                     openRouterModels = openRouterModels,
                     openRouterAudioModels = openRouterAudioModels,
+                    openRouterProviderSort = openRouterProviderSort,
+                    openRouterReasoningEffort = openRouterReasoningEffort,
                     modelStatus = modelStatus,
                     hasMistralKey = mistralKey.isNotBlank(),
                     hasGroqKey = groqKey.isNotBlank(),
@@ -475,6 +522,12 @@ private fun VoiceSlipApp(
                         Thread {
                             val result = runCatching { OpenRouterClient().listModels(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
                             result.onSuccess { repository.setCachedModels(ProviderId.OPENROUTER, it) }
+                            result.onSuccess {
+                                refreshOpenRouterEndpointDetails(
+                                    repository.getPostProcessingFavoriteIds(PostProcessingProvider.OPENROUTER) +
+                                        pipelineConfig.openRouterPostProcessingModel
+                                )
+                            }
                             val message = result.fold(
                                 onSuccess = { "OpenRouter models refreshed (${it.size})" },
                                 onFailure = { "OpenRouter refresh failed: ${it.message}" }
@@ -490,6 +543,13 @@ private fun VoiceSlipApp(
                         Thread {
                             val result = runCatching { OpenRouterClient().listAudioModels(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
                             result.onSuccess { repository.setCachedOpenRouterAudioModels(it) }
+                            result.onSuccess {
+                                refreshOpenRouterEndpointDetails(
+                                    repository.getOpenRouterAudioFavoriteIds() +
+                                        pipelineConfig.openRouterAudioTranscriptionModel +
+                                        pipelineConfig.openRouterAudioDirectModel
+                                )
+                            }
                             val message = result.fold(
                                 onSuccess = { "OpenRouter audio models refreshed (${it.size})" },
                                 onFailure = { "OpenRouter audio refresh failed: ${it.message}" }
@@ -499,6 +559,29 @@ private fun VoiceSlipApp(
                                 modelStatus = message
                             }
                         }.start()
+                    },
+                    cachedOpenRouterEndpointDetails = { repository.getCachedOpenRouterEndpointDetails(it) },
+                    onLoadOpenRouterEndpointDetails = { modelId, callback ->
+                        val cached = repository.getCachedOpenRouterEndpointDetails(modelId)
+                        if (cached != null) callback(Result.success(cached))
+                        Thread {
+                            val result = runCatching {
+                                OpenRouterClient().endpointDetails(
+                                    secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty(),
+                                    modelId
+                                )
+                            }
+                            result.onSuccess { repository.setCachedOpenRouterEndpointDetails(it) }
+                            (context as? ComponentActivity)?.runOnUiThread { callback(result) }
+                        }.start()
+                    },
+                    onOpenRouterProviderSortChange = {
+                        openRouterProviderSort = it
+                        repository.setOpenRouterProviderSort(it)
+                    },
+                    onOpenRouterReasoningEffortChange = {
+                        openRouterReasoningEffort = it
+                        repository.setOpenRouterReasoningEffort(it)
                     }
                 )
                 STYLE_TAB_INDEX -> StyleScreen(repository = repository)
@@ -767,6 +850,8 @@ private fun ModelsScreen(
     groqModels: List<ModelOption>,
     openRouterModels: List<ModelOption>,
     openRouterAudioModels: List<ModelOption>,
+    openRouterProviderSort: OpenRouterProviderSort,
+    openRouterReasoningEffort: OpenRouterReasoningEffort,
     modelStatus: String?,
     hasMistralKey: Boolean,
     hasGroqKey: Boolean,
@@ -776,7 +861,11 @@ private fun ModelsScreen(
     onPreserveSpokenLanguageChange: (Boolean) -> Unit,
     onRefreshGroq: () -> Unit,
     onRefreshOpenRouter: () -> Unit,
-    onRefreshOpenRouterAudio: () -> Unit
+    onRefreshOpenRouterAudio: () -> Unit,
+    cachedOpenRouterEndpointDetails: (String) -> OpenRouterEndpointDetails?,
+    onLoadOpenRouterEndpointDetails: (String, (Result<OpenRouterEndpointDetails>) -> Unit) -> Unit,
+    onOpenRouterProviderSortChange: (OpenRouterProviderSort) -> Unit,
+    onOpenRouterReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit
 ) {
     var route by remember { mutableStateOf<ModelsRoute>(ModelsRoute.Main) }
     var favoritesVersion by remember { mutableIntStateOf(0) }
@@ -814,8 +903,14 @@ private fun ModelsScreen(
             hasGroqKey = hasGroqKey,
             hasOpenRouterKey = hasOpenRouterKey,
             modelStatus = modelStatus,
+            openRouterProviderSort = openRouterProviderSort,
+            openRouterReasoningEffort = openRouterReasoningEffort,
             onBack = { route = ModelsRoute.Main },
             onRefresh = onRefreshOpenRouterAudio,
+            cachedOpenRouterEndpointDetails = cachedOpenRouterEndpointDetails,
+            onLoadOpenRouterEndpointDetails = onLoadOpenRouterEndpointDetails,
+            onOpenRouterProviderSortChange = onOpenRouterProviderSortChange,
+            onOpenRouterReasoningEffortChange = onOpenRouterReasoningEffortChange,
             onConfigChange = onConfigChange,
             onToggleFavorite = {
                 repository.toggleOpenRouterAudioFavorite(it)
@@ -830,11 +925,17 @@ private fun ModelsScreen(
             openRouterFavoriteIds = openRouterPostFavoriteIds,
             hasGroqKey = hasGroqKey,
             hasOpenRouterKey = hasOpenRouterKey,
+            openRouterProviderSort = openRouterProviderSort,
+            openRouterReasoningEffort = openRouterReasoningEffort,
             modelStatus = modelStatus,
             onBack = { route = ModelsRoute.Main },
             onConfigChange = onConfigChange,
             onRefreshGroq = onRefreshGroq,
             onRefreshOpenRouter = onRefreshOpenRouter,
+            cachedOpenRouterEndpointDetails = cachedOpenRouterEndpointDetails,
+            onLoadOpenRouterEndpointDetails = onLoadOpenRouterEndpointDetails,
+            onOpenRouterProviderSortChange = onOpenRouterProviderSortChange,
+            onOpenRouterReasoningEffortChange = onOpenRouterReasoningEffortChange,
             onToggleFavorite = { provider, modelId ->
                 repository.togglePostProcessingFavorite(provider, modelId)
                 refreshFavorites()
@@ -969,6 +1070,7 @@ private sealed class ModelsRoute {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun AudioModelPickerScreen(
     role: AudioModelPickerRole,
     config: PipelineConfig,
@@ -978,13 +1080,21 @@ private fun AudioModelPickerScreen(
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
     modelStatus: String?,
+    openRouterProviderSort: OpenRouterProviderSort,
+    openRouterReasoningEffort: OpenRouterReasoningEffort,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
+    cachedOpenRouterEndpointDetails: (String) -> OpenRouterEndpointDetails?,
+    onLoadOpenRouterEndpointDetails: (String, (Result<OpenRouterEndpointDetails>) -> Unit) -> Unit,
+    onOpenRouterProviderSortChange: (OpenRouterProviderSort) -> Unit,
+    onOpenRouterReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit,
     onConfigChange: (PipelineConfig) -> Unit,
     onToggleFavorite: (String) -> Unit
 ) {
     BackHandler { onBack() }
     var pickerState by remember { mutableStateOf(initialAudioModelPickerState(role, config)) }
+    var showOpenRouterSettings by remember { mutableStateOf(false) }
+    var endpointSheet by remember { mutableStateOf<EndpointSheetState?>(null) }
     val activeProvider = pickerState.activeProvider
     val selectedModel = selectedAudioModelId(config, role, activeProvider)
     val providerOptions = when (role) {
@@ -1002,7 +1112,7 @@ private fun AudioModelPickerScreen(
         } else {
             builtInAudioRows(role, activeProvider)
         }
-    }
+    }.withOpenRouterRouteSummaries(activeProvider == ProviderId.OPENROUTER, openRouterProviderSort, cachedOpenRouterEndpointDetails)
     LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { ScreenHeader(audioPickerTitle(role), onBack) }
         item {
@@ -1016,6 +1126,19 @@ private fun AudioModelPickerScreen(
                 }
                 if (!hasKey) {
                     Text("Missing ${activeProvider.label} API key", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                }
+                if (activeProvider == ProviderId.OPENROUTER) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Routing: ${openRouterProviderSort.label.lowercase()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Reasoning: ${openRouterReasoningEffort.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        OutlinedButton(onClick = { showOpenRouterSettings = true }) {
+                            Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Settings")
+                        }
+                    }
                 }
             }
         }
@@ -1055,13 +1178,39 @@ private fun AudioModelPickerScreen(
                     onBack()
                 },
                 onToggleFavorite = { if (activeProvider == ProviderId.OPENROUTER) onToggleFavorite(row.id) },
-                showFavorite = activeProvider == ProviderId.OPENROUTER
+                showFavorite = activeProvider == ProviderId.OPENROUTER,
+                onShowDetails = if (activeProvider == ProviderId.OPENROUTER) {
+                    {
+                        endpointSheet = EndpointSheetState(row.name, row.id, null, "Loading endpoint details...")
+                        onLoadOpenRouterEndpointDetails(row.id) { result ->
+                            endpointSheet = result.fold(
+                                onSuccess = { EndpointSheetState(row.name, row.id, it, null) },
+                                onFailure = { EndpointSheetState(row.name, row.id, null, it.message ?: "Endpoint details failed.") }
+                            )
+                        }
+                    }
+                } else {
+                    null
+                }
             )
         }
+    }
+    if (showOpenRouterSettings) {
+        OpenRouterSettingsSheet(
+            providerSort = openRouterProviderSort,
+            reasoningEffort = openRouterReasoningEffort,
+            onProviderSortChange = onOpenRouterProviderSortChange,
+            onReasoningEffortChange = onOpenRouterReasoningEffortChange,
+            onDismiss = { showOpenRouterSettings = false }
+        )
+    }
+    endpointSheet?.let { sheet ->
+        OpenRouterEndpointDetailsSheet(sheet, openRouterProviderSort, onDismiss = { endpointSheet = null })
     }
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun PostProcessingPickerScreen(
     config: PipelineConfig,
     groqModels: List<ModelOption>,
@@ -1070,16 +1219,24 @@ private fun PostProcessingPickerScreen(
     openRouterFavoriteIds: List<String>,
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
+    openRouterProviderSort: OpenRouterProviderSort,
+    openRouterReasoningEffort: OpenRouterReasoningEffort,
     modelStatus: String?,
     onBack: () -> Unit,
     onConfigChange: (PipelineConfig) -> Unit,
     onRefreshGroq: () -> Unit,
     onRefreshOpenRouter: () -> Unit,
+    cachedOpenRouterEndpointDetails: (String) -> OpenRouterEndpointDetails?,
+    onLoadOpenRouterEndpointDetails: (String, (Result<OpenRouterEndpointDetails>) -> Unit) -> Unit,
+    onOpenRouterProviderSortChange: (OpenRouterProviderSort) -> Unit,
+    onOpenRouterReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit,
     onToggleFavorite: (PostProcessingProvider, String) -> Unit,
     onSelected: () -> Unit
 ) {
     BackHandler { onBack() }
     var pickerState by remember { mutableStateOf(initialPostProcessingPickerState(config)) }
+    var showOpenRouterSettings by remember { mutableStateOf(false) }
+    var endpointSheet by remember { mutableStateOf<EndpointSheetState?>(null) }
     val activeProvider = pickerState.activeProvider
     val models = when (activeProvider) {
         PostProcessingProvider.GROQ -> groqModels
@@ -1099,7 +1256,7 @@ private fun PostProcessingPickerScreen(
     }
     val rows = remember(models, favoriteIds, selectedModel, pickerState.query, activeProvider) {
         modelRows(models, favoriteIds, selectedModel, pickerState.query, fallbackProvider = activeProvider.label)
-    }
+    }.withOpenRouterRouteSummaries(activeProvider == PostProcessingProvider.OPENROUTER, openRouterProviderSort, cachedOpenRouterEndpointDetails)
     LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { ScreenHeader("Choose post-processing model", onBack) }
         item {
@@ -1113,6 +1270,19 @@ private fun PostProcessingPickerScreen(
                 }
                 if (!hasKey) {
                     Text("Missing ${activeProvider.label} API key", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                }
+                if (activeProvider == PostProcessingProvider.OPENROUTER) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Routing: ${openRouterProviderSort.label.lowercase()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Reasoning: ${openRouterReasoningEffort.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        OutlinedButton(onClick = { showOpenRouterSettings = true }) {
+                            Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Settings")
+                        }
+                    }
                 }
             }
         }
@@ -1156,9 +1326,34 @@ private fun PostProcessingPickerScreen(
                     onConfigChange(pickerState.selectModel(config, row.id))
                     onSelected()
                 },
-                onToggleFavorite = { onToggleFavorite(activeProvider, row.id) }
+                onToggleFavorite = { onToggleFavorite(activeProvider, row.id) },
+                onShowDetails = if (activeProvider == PostProcessingProvider.OPENROUTER) {
+                    {
+                        endpointSheet = EndpointSheetState(row.name, row.id, null, "Loading endpoint details...")
+                        onLoadOpenRouterEndpointDetails(row.id) { result ->
+                            endpointSheet = result.fold(
+                                onSuccess = { EndpointSheetState(row.name, row.id, it, null) },
+                                onFailure = { EndpointSheetState(row.name, row.id, null, it.message ?: "Endpoint details failed.") }
+                            )
+                        }
+                    }
+                } else {
+                    null
+                }
             )
         }
+    }
+    if (showOpenRouterSettings) {
+        OpenRouterSettingsSheet(
+            providerSort = openRouterProviderSort,
+            reasoningEffort = openRouterReasoningEffort,
+            onProviderSortChange = onOpenRouterProviderSortChange,
+            onReasoningEffortChange = onOpenRouterReasoningEffortChange,
+            onDismiss = { showOpenRouterSettings = false }
+        )
+    }
+    endpointSheet?.let { sheet ->
+        OpenRouterEndpointDetailsSheet(sheet, openRouterProviderSort, onDismiss = { endpointSheet = null })
     }
 }
 
@@ -1170,7 +1365,8 @@ private fun ModelPickerRow(
     favorite: Boolean,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
-    showFavorite: Boolean = true
+    showFavorite: Boolean = true,
+    onShowDetails: (() -> Unit)? = null
 ) {
     val container = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
     val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
@@ -1207,6 +1403,15 @@ private fun ModelPickerRow(
                 }
             }
             if (showFavorite) {
+                onShowDetails?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            imageVector = Icons.Filled.Info,
+                            contentDescription = "Model details",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 IconButton(onClick = onToggleFavorite) {
                     Icon(
                         imageVector = if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
@@ -1221,7 +1426,238 @@ private fun ModelPickerRow(
 
 private fun modelRowSubtitle(row: ModelDisplayRow): String {
     val availability = if (row.isAvailable) "" else " · Unavailable in latest refresh"
-    return "${row.provider} · ${row.detail}$availability"
+    return "${row.detail}$availability"
+}
+
+private fun List<ModelDisplayRow>.withOpenRouterRouteSummaries(
+    enabled: Boolean,
+    providerSort: OpenRouterProviderSort,
+    cachedDetails: (String) -> OpenRouterEndpointDetails?
+): List<ModelDisplayRow> {
+    if (!enabled || providerSort == OpenRouterProviderSort.DEFAULT) return this
+    return map { row ->
+        val summary = cachedDetails(row.id)?.predictedRouteSummary(providerSort)
+        if (summary == null) row else row.copy(detail = summary)
+    }
+}
+
+private fun OpenRouterEndpointDetails.predictedRouteSummary(providerSort: OpenRouterProviderSort): String? =
+    endpoints.sortedFor(providerSort).firstOrNull()?.let { endpoint ->
+        listOf(
+            endpoint.providerName.ifBlank { endpoint.name },
+            endpoint.pricePair(),
+            endpoint.throughput.p50?.let { keepTogether("${formatNumber(it)} t/s") } ?: keepTogether("speed n/a"),
+            endpoint.latency.p50?.let { keepTogether("${formatLatencyMillis(it)} TTFT") } ?: keepTogether("TTFT n/a")
+        ).joinToString(" · ")
+    }
+
+private data class EndpointSheetState(
+    val modelName: String,
+    val modelId: String,
+    val details: OpenRouterEndpointDetails?,
+    val status: String?
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OpenRouterEndpointDetailsSheet(
+    state: EndpointSheetState,
+    providerSort: OpenRouterProviderSort,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 620.dp),
+            contentPadding = PaddingValues(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Text(state.modelName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(state.modelId, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Routing: ${providerSort.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("TTFT is p50 time to first token. Throughput is output tokens per second.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            state.status?.let { status ->
+                item { Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            val endpoints = state.details?.endpoints.orEmpty().sortedFor(providerSort)
+            if (endpoints.isNotEmpty()) {
+                item {
+                    Text(
+                        if (providerSort == OpenRouterProviderSort.DEFAULT) "Endpoint details" else "Endpoint candidates",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                items(endpoints) { endpoint ->
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(endpoint.providerName.ifBlank { endpoint.name }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (endpoint.tag.isNotBlank()) {
+                                Text(endpoint.tag, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                MetricChip(Icons.Filled.AttachMoney, endpoint.pricePair())
+                                MetricChip(Icons.Filled.Speed, endpoint.throughput.p50?.let { "${formatNumber(it)} t/s" } ?: "speed n/a")
+                                MetricChip(Icons.Filled.Timer, endpoint.latency.p50?.let { "${formatLatencyMillis(it)} TTFT" } ?: "TTFT n/a")
+                                MetricChip(Icons.Filled.Percent, endpoint.uptimeLast30m?.let { "uptime ${formatNumber(it)}%" } ?: "uptime n/a")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun List<com.imdinkie.voiceslip.data.OpenRouterEndpointOption>.sortedFor(sort: OpenRouterProviderSort): List<com.imdinkie.voiceslip.data.OpenRouterEndpointOption> =
+    when (sort) {
+        OpenRouterProviderSort.PRICE -> sortedBy { it.totalPricePerMillion() ?: Double.MAX_VALUE }
+        OpenRouterProviderSort.THROUGHPUT -> sortedWith(compareByDescending<com.imdinkie.voiceslip.data.OpenRouterEndpointOption> { it.throughput.p50 ?: -1.0 })
+        OpenRouterProviderSort.LATENCY -> sortedBy { it.latency.p50 ?: Double.MAX_VALUE }
+        OpenRouterProviderSort.DEFAULT -> sortedBy { it.totalPricePerMillion() ?: Double.MAX_VALUE }
+    }
+
+private fun com.imdinkie.voiceslip.data.OpenRouterEndpointOption.totalPricePerMillion(): Double? {
+    val input = promptPricePerMillion ?: return null
+    val output = completionPricePerMillion ?: return null
+    return input + output
+}
+
+@Composable
+private fun MetricChip(icon: ImageVector, label: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(keepTogether(label), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+    }
+}
+
+private fun com.imdinkie.voiceslip.data.OpenRouterEndpointOption.pricePair(): String {
+    val input = promptPricePerMillion
+    val output = completionPricePerMillion
+    return if (input != null && output != null) "${formatMoney(input)}/${formatMoney(output)}" else "price n/a"
+}
+
+private fun formatMoney(value: Double): String =
+    if (value == 0.0) "\$0" else "\$" + if (value < 10) "%.2f".format(value) else "%.0f".format(value)
+
+private fun formatNumber(value: Double): String =
+    if (value < 10) "%.2f".format(value) else "%.0f".format(value)
+
+private fun formatLatencyMillis(value: Double): String {
+    val millis = if (value < 100) value * 1000.0 else value
+    return if (millis < 1000) "${"%.0f".format(millis)} ms" else "${"%.1f".format(millis / 1000.0)} s"
+}
+
+private fun keepTogether(value: String): String = value.replace(" ", "\u2060\u00A0\u2060").replace("/", "\u2060/\u2060")
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun OpenRouterSettingsSheet(
+    providerSort: OpenRouterProviderSort,
+    reasoningEffort: OpenRouterReasoningEffort,
+    onProviderSortChange: (OpenRouterProviderSort) -> Unit,
+    onReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("OpenRouter settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text("Applies to every OpenRouter request.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingHeader("Provider routing", providerSort.label)
+                Text(
+                    "Choose how OpenRouter should prefer eligible providers. Default keeps OpenRouter's normal routing.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                ) {
+                    OpenRouterProviderSort.entries.forEach { sort ->
+                        CompactChoiceChip(
+                            selected = providerSort == sort,
+                            label = sort.label,
+                            icon = sort.icon(),
+                            onClick = { onProviderSortChange(sort) }
+                        )
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingHeader("Reasoning effort", reasoningEffort.label)
+                Text(
+                    "Auto sends no reasoning override. Other values apply only when the selected model supports reasoning.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                ) {
+                    OpenRouterReasoningEffort.entries.forEach { effort ->
+                        CompactChoiceChip(
+                            selected = reasoningEffort == effort,
+                            label = effort.label,
+                            icon = effort.icon(),
+                            onClick = { onReasoningEffortChange(effort) }
+                        )
+                    }
+                }
+                Text(
+                    "Reasoning text is excluded from responses so it never becomes inserted dictation output.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun CompactChoiceChip(
+    selected: Boolean,
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        modifier = Modifier.height(36.dp).widthIn(min = 92.dp),
+        label = { Text(label, maxLines = 1) },
+        leadingIcon = {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+    )
+}
+
+private fun OpenRouterProviderSort.icon(): ImageVector = when (this) {
+    OpenRouterProviderSort.DEFAULT -> Icons.Filled.Tune
+    OpenRouterProviderSort.PRICE -> Icons.Filled.AttachMoney
+    OpenRouterProviderSort.THROUGHPUT -> Icons.Filled.Speed
+    OpenRouterProviderSort.LATENCY -> Icons.Filled.Timer
+}
+
+private fun OpenRouterReasoningEffort.icon(): ImageVector = when (this) {
+    OpenRouterReasoningEffort.AUTO -> Icons.Filled.AutoAwesome
+    OpenRouterReasoningEffort.NONE -> Icons.Filled.Block
+    OpenRouterReasoningEffort.MINIMAL,
+    OpenRouterReasoningEffort.LOW -> Icons.Filled.Bolt
+    OpenRouterReasoningEffort.MEDIUM -> Icons.Filled.Psychology
+    OpenRouterReasoningEffort.HIGH,
+    OpenRouterReasoningEffort.XHIGH -> Icons.Filled.Psychology
 }
 
 @Composable
@@ -1233,7 +1669,7 @@ private fun SettingsCard(modifier: Modifier = Modifier, content: @Composable Col
 
 @Composable
 private fun ChoiceRow(options: List<String>, selected: String, onSelect: (String) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { option ->
             if (option == selected) Button(onClick = { onSelect(option) }) { Text(option) }
             else OutlinedButton(onClick = { onSelect(option) }) { Text(option) }

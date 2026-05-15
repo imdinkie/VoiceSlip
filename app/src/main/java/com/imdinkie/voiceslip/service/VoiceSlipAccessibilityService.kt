@@ -415,7 +415,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val styleResolution = repository.resolveStyleForPackage(activePackage)
         val dictionary = repository.listDictionary().map { it.phrase }
         val validation = runCatching {
-            PipelineExecutor { secretStore.getApiKey(it) }.validate(config)
+            PipelineExecutor(keyProvider = { secretStore.getApiKey(it) }).validate(config)
         }.exceptionOrNull()
         if (validation != null) {
             toast(validation.message ?: "Complete model setup in VoiceSlip")
@@ -532,7 +532,15 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     val plan = repository.dictionaryPlanForTranscription(config, dictionary)
                     dictionary.take(plan.includedTerms)
                 }
-                val pipeline = PipelineExecutor { secretStore.getApiKey(it) }.execute(
+                val pipeline = PipelineExecutor(
+                    keyProvider = { secretStore.getApiKey(it) },
+                    openRouterProviderSort = { repository.getOpenRouterProviderSort() },
+                    openRouterReasoningEffort = { repository.getOpenRouterReasoningEffort() },
+                    openRouterModelLookup = { modelId ->
+                        (repository.getCachedModels(com.example.voiceslip.data.ProviderId.OPENROUTER) + repository.getCachedOpenRouterAudioModels())
+                            .firstOrNull { it.id == modelId }
+                    }
+                ).execute(
                     config,
                     result.file,
                     dictionary,

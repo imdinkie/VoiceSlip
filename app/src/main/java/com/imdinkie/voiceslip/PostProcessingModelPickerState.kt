@@ -233,8 +233,35 @@ internal fun modelRows(
             name = model?.name ?: id,
             provider = model?.provider?.takeIf { it.isNotBlank() } ?: fallbackProvider,
             isAvailable = model != null,
-            detail = id
+            detail = model?.compactModelDetail(fallbackProvider) ?: id
         )
         row.takeIf { cleanQuery.isBlank() || it.id.contains(cleanQuery, true) || it.name.contains(cleanQuery, true) }
     }
 }
+
+private fun ModelOption.compactModelDetail(fallbackProvider: String): String {
+    val metadata = listOfNotNull(
+        priceSummary(),
+        contextLength?.let { keepTogether("${formatContextLength(it)} ctx") }
+    ).joinToString(" · ")
+    if (metadata.isNotBlank()) return metadata
+    return if ((provider.ifBlank { fallbackProvider }).equals("Groq", ignoreCase = true) && name == id) "" else id
+}
+
+private fun ModelOption.priceSummary(): String? {
+    val input = promptPricePerMillion ?: return null
+    val output = completionPricePerMillion ?: return null
+    return "from ${formatPrice(input)}/${formatPrice(output)}"
+}
+
+private fun formatContextLength(value: Int): String =
+    when {
+        value >= 1_000_000 -> "${value / 1_000_000}M"
+        value >= 1_000 -> "${value / 1_000}k"
+        else -> value.toString()
+    }
+
+private fun formatPrice(value: Double): String =
+    if (value == 0.0) "\$0" else "\$" + if (value < 10) "%.2f".format(value) else "%.0f".format(value)
+
+private fun keepTogether(value: String): String = value.replace(" ", "\u2060\u00A0\u2060").replace("/", "\u2060/\u2060")

@@ -45,6 +45,23 @@ enum class EngineKind {
     OPENROUTER_AUDIO
 }
 
+enum class OpenRouterProviderSort(val label: String, val apiValue: String?) {
+    DEFAULT("Default", null),
+    PRICE("Price", "price"),
+    THROUGHPUT("Throughput", "throughput"),
+    LATENCY("Latency", "latency")
+}
+
+enum class OpenRouterReasoningEffort(val label: String, val apiValue: String?) {
+    AUTO("Auto", null),
+    NONE("None", "none"),
+    MINIMAL("Minimal", "minimal"),
+    LOW("Low", "low"),
+    MEDIUM("Medium", "medium"),
+    HIGH("High", "high"),
+    XHIGH("XHigh", "xhigh")
+}
+
 val DEFAULT_OPENROUTER_AUDIO_FAVORITES = listOf(
     "google/gemini-3.1-flash-lite-preview",
     "~google/gemini-pro-latest",
@@ -180,7 +197,32 @@ data class ModelOption(
     val id: String,
     val name: String,
     val provider: String = "",
-    val contextLength: Int? = null
+    val contextLength: Int? = null,
+    val promptPricePerMillion: Double? = null,
+    val completionPricePerMillion: Double? = null,
+    val supportedParameters: List<String> = emptyList()
+)
+
+data class OpenRouterEndpointMetric(
+    val p50: Double? = null
+)
+
+data class OpenRouterEndpointOption(
+    val name: String,
+    val providerName: String,
+    val tag: String,
+    val promptPricePerMillion: Double? = null,
+    val completionPricePerMillion: Double? = null,
+    val throughput: OpenRouterEndpointMetric = OpenRouterEndpointMetric(),
+    val latency: OpenRouterEndpointMetric = OpenRouterEndpointMetric(),
+    val uptimeLast30m: Double? = null
+)
+
+data class OpenRouterEndpointDetails(
+    val modelId: String,
+    val modelName: String,
+    val endpoints: List<OpenRouterEndpointOption>,
+    val fetchedAtMillis: Long
 )
 
 data class HistoryItem(

@@ -1,6 +1,11 @@
 package com.imdinkie.voiceslip.net
 
 import com.imdinkie.voiceslip.data.ModelOption
+import com.imdinkie.voiceslip.data.OpenRouterEndpointDetails
+import com.imdinkie.voiceslip.data.OpenRouterEndpointMetric
+import com.imdinkie.voiceslip.data.OpenRouterEndpointOption
+import com.imdinkie.voiceslip.data.OpenRouterProviderSort
+import com.imdinkie.voiceslip.data.OpenRouterReasoningEffort
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -17,9 +22,13 @@ class OpenRouterClient {
         dictionaryTerms: List<String>,
         stylePrompt: String,
         cleanupPolicy: String,
-        preserveSpokenLanguage: Boolean
+        preserveSpokenLanguage: Boolean,
+        providerSort: OpenRouterProviderSort = OpenRouterProviderSort.DEFAULT,
+        reasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.AUTO,
+        supportsReasoning: Boolean = false
     ): PostProcessingResult {
         val request = postProcessingRequest(model, rawTranscript, detectedLanguage, dictionaryTerms, stylePrompt, cleanupPolicy, preserveSpokenLanguage)
+            .withOpenRouterOptions(providerSort, reasoningEffort, supportsReasoning)
         val json = JSONObject(postJson("https://openrouter.ai/api/v1/chat/completions", apiKey, request))
         return parsePostProcessing(json, model)
     }
@@ -38,16 +47,39 @@ class OpenRouterClient {
             .sortedBy { it.name.lowercase() }
     }
 
+    fun endpointDetails(apiKey: String, modelId: String): OpenRouterEndpointDetails {
+        val encodedModelId = modelId.split('/').joinToString("/") { java.net.URLEncoder.encode(it, Charsets.UTF_8.name()) }
+        val connection = (URL("https://openrouter.ai/api/v1/models/$encodedModelId/endpoints").openConnection() as HttpURLConnection)
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 20_000
+        connection.readTimeout = 60_000
+        if (apiKey.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $apiKey")
+        val responseCode = connection.responseCode
+        val body = if (responseCode in 200..299) {
+            connection.inputStream.bufferedReader().use { it.readText() }
+        } else {
+            connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        }
+        connection.disconnect()
+        if (responseCode !in 200..299) {
+            throw IllegalStateException("OpenRouter endpoint details failed ($responseCode): ${body.take(500)}")
+        }
+        return JSONObject(body).toEndpointDetails(modelId)
+    }
+
     fun transcribeAudio(
         apiKey: String,
         model: String,
         audioFile: File,
         dictionaryTerms: List<String>,
         languageHints: String,
-        preserveSpokenLanguage: Boolean
+        preserveSpokenLanguage: Boolean,
+        providerSort: OpenRouterProviderSort = OpenRouterProviderSort.DEFAULT,
+        reasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.AUTO,
+        supportsReasoning: Boolean = false
     ): TranscriptionResult {
         val prompt = buildAudioTranscriptionPrompt(languageHints, preserveSpokenLanguage, dictionaryTerms)
-        val json = postAudioChat(apiKey, model, audioFile, prompt)
+        val json = postAudioChat(apiKey, model, audioFile, prompt, providerSort, reasoningEffort, supportsReasoning)
         return TranscriptionResult(
             text = json.chatContent().trim(),
             language = null,
@@ -64,10 +96,13 @@ class OpenRouterClient {
         cleanupPolicy: String,
         dictionaryTerms: List<String>,
         languageHints: String,
-        preserveSpokenLanguage: Boolean
+        preserveSpokenLanguage: Boolean,
+        providerSort: OpenRouterProviderSort = OpenRouterProviderSort.DEFAULT,
+        reasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.AUTO,
+        supportsReasoning: Boolean = false
     ): DirectAudioResult {
         val prompt = buildAudioDirectPrompt(cleanupPolicy, stylePrompt, languageHints, preserveSpokenLanguage, dictionaryTerms)
-        val json = postAudioChat(apiKey, model, audioFile, prompt)
+        val json = postAudioChat(apiKey, model, audioFile, prompt, providerSort, reasoningEffort, supportsReasoning)
         return DirectAudioResult(
             finalText = json.chatContent().trim(),
             language = null,
@@ -100,7 +135,15 @@ class OpenRouterClient {
         return (0 until data.length()).mapNotNull { data.optJSONObject(it) }.filter { it.optString("id").isNotBlank() }
     }
 
-    private fun postAudioChat(apiKey: String, model: String, audioFile: File, prompt: String): JSONObject {
+    private fun postAudioChat(
+        apiKey: String,
+        model: String,
+        audioFile: File,
+        prompt: String,
+        providerSort: OpenRouterProviderSort,
+        reasoningEffort: OpenRouterReasoningEffort,
+        supportsReasoning: Boolean
+    ): JSONObject {
         val request = JSONObject()
             .put("model", model)
             .put("temperature", 0.1)
@@ -128,8 +171,25 @@ class OpenRouterClient {
                         )
                 )
             )
+            .withOpenRouterOptions(providerSort, reasoningEffort, supportsReasoning)
         return JSONObject(postJson("https://openrouter.ai/api/v1/chat/completions", apiKey, request))
     }
+}
+
+private fun JSONObject.withOpenRouterOptions(
+    providerSort: OpenRouterProviderSort,
+    reasoningEffort: OpenRouterReasoningEffort,
+    supportsReasoning: Boolean
+): JSONObject {
+    providerSort.apiValue?.let { sort ->
+        put("provider", JSONObject().put("sort", sort))
+    }
+    if (supportsReasoning) {
+        reasoningEffort.apiValue?.let { effort ->
+            put("reasoning", JSONObject().put("effort", effort).put("exclude", true))
+        }
+    }
+    return this
 }
 
 private fun buildAudioTranscriptionPrompt(
@@ -201,9 +261,52 @@ private fun JSONObject.toModelOption(): ModelOption {
         id = id,
         name = optString("name", id),
         provider = "OpenRouter",
-        contextLength = optInt("context_length").takeIf { it > 0 }
+        contextLength = optInt("context_length").takeIf { it > 0 },
+        promptPricePerMillion = optJSONObject("pricing")?.optPricePerMillion("prompt"),
+        completionPricePerMillion = optJSONObject("pricing")?.optPricePerMillion("completion"),
+        supportedParameters = optJSONArray("supported_parameters").toStringList()
     )
 }
+
+private fun JSONObject.toEndpointDetails(fallbackModelId: String): OpenRouterEndpointDetails {
+    val data = optJSONObject("data") ?: this
+    val modelId = data.optString("id", fallbackModelId)
+    val endpoints = data.optJSONArray("endpoints") ?: JSONArray()
+    return OpenRouterEndpointDetails(
+        modelId = modelId,
+        modelName = data.optString("name", modelId),
+        fetchedAtMillis = System.currentTimeMillis(),
+        endpoints = (0 until endpoints.length()).mapNotNull { endpoints.optJSONObject(it)?.toEndpointOption() }
+    )
+}
+
+private fun JSONObject.toEndpointOption(): OpenRouterEndpointOption {
+    val pricing = optJSONObject("pricing")
+    return OpenRouterEndpointOption(
+        name = optString("name"),
+        providerName = optString("provider_name"),
+        tag = optString("tag"),
+        promptPricePerMillion = pricing?.optPricePerMillion("prompt"),
+        completionPricePerMillion = pricing?.optPricePerMillion("completion"),
+        throughput = OpenRouterEndpointMetric(metricP50("throughput_last_30m")),
+        latency = OpenRouterEndpointMetric(metricP50("latency_last_30m")),
+        uptimeLast30m = if (has("uptime_last_30m") && !isNull("uptime_last_30m")) optDouble("uptime_last_30m") else null
+    )
+}
+
+private fun JSONObject.metricP50(key: String): Double? {
+    val raw = opt(key) ?: return null
+    if (raw is Number) return raw.toDouble()
+    if (raw is JSONObject) {
+        return listOf("p50", "50", "median").firstNotNullOfOrNull { metricKey ->
+            raw.opt(metricKey)?.let { value -> (value as? Number)?.toDouble() ?: value.toString().toDoubleOrNull() }
+        }
+    }
+    return raw.toString().toDoubleOrNull()
+}
+
+private fun JSONObject.optPricePerMillion(key: String): Double? =
+    optString(key).toDoubleOrNull()?.let { it * 1_000_000.0 }
 
 private fun JSONObject.supportsText(): Boolean {
     val architecture = optJSONObject("architecture")

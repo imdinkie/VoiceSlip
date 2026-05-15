@@ -96,6 +96,27 @@ class PostProcessingModelPickerStateTest {
     }
 
     @Test
+    fun modelRowsPreferCompactPriceMetadataOverRawId() {
+        val rows = modelRows(
+            models = listOf(
+                ModelOption(
+                    id = "google/gemini-flash",
+                    name = "Gemini Flash",
+                    promptPricePerMillion = 0.30,
+                    completionPricePerMillion = 2.50,
+                    contextLength = 1_000_000
+                )
+            ),
+            favoriteIds = emptyList(),
+            selectedId = "",
+            query = "",
+            fallbackProvider = "OpenRouter"
+        )
+
+        assertEquals("from \$0.30/\$2.50 · 1M\u2060\u00A0\u2060ctx", rows.single().detail)
+    }
+
+    @Test
     fun selectedUnavailableModelRemainsVisibleAndMarkedUnavailable() {
         val rows = modelRows(
             models = emptyList(),

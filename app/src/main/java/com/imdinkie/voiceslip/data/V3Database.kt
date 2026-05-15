@@ -100,6 +100,8 @@ data class PipelineConfigEntity(
     @ColumnInfo(defaultValue = "''")
     val openRouterPostProcessingModel: String,
     @ColumnInfo(defaultValue = "''")
+    val cerebrasPostProcessingModel: String,
+    @ColumnInfo(defaultValue = "''")
     val openRouterAudioDirectModel: String
 )
 
@@ -258,7 +260,7 @@ interface VoiceSlipDao {
         EngineDictionaryRoutingEntity::class,
         PromptSettingEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class VoiceSlipDatabase : RoomDatabase() {
@@ -274,7 +276,7 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                     VoiceSlipDatabase::class.java,
                     "voiceslip_v3.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_5, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_5, MIGRATION_4_5, MIGRATION_5_6)
                     .allowMainThreadQueries()
                     .build()
                     .also { instance = it }
@@ -404,6 +406,12 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                     """.trimIndent()
                 )
                 db.execSQL("DROP TABLE pipeline_config_old")
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN cerebrasPostProcessingModel TEXT NOT NULL DEFAULT ''")
             }
         }
     }

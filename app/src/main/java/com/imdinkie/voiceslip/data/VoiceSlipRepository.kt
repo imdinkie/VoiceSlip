@@ -129,6 +129,32 @@ class VoiceSlipRepository(context: Context) {
         toggleStringListValue(key, modelId)
     }
 
+    fun getOpenRouterProviderSort(): OpenRouterProviderSort =
+        enumValue(prefs.getString(KEY_OPENROUTER_PROVIDER_SORT, null), OpenRouterProviderSort.THROUGHPUT)
+
+    fun setOpenRouterProviderSort(sort: OpenRouterProviderSort) {
+        prefs.edit().putString(KEY_OPENROUTER_PROVIDER_SORT, sort.name).apply()
+    }
+
+    fun getOpenRouterReasoningEffort(): OpenRouterReasoningEffort =
+        enumValue(prefs.getString(KEY_OPENROUTER_REASONING_EFFORT, null), OpenRouterReasoningEffort.AUTO)
+
+    fun setOpenRouterReasoningEffort(effort: OpenRouterReasoningEffort) {
+        prefs.edit().putString(KEY_OPENROUTER_REASONING_EFFORT, effort.name).apply()
+    }
+
+    fun getCachedOpenRouterEndpointDetails(modelId: String): OpenRouterEndpointDetails? {
+        val root = JSONObject(prefs.getString(KEY_OPENROUTER_ENDPOINT_DETAILS, "{}").orEmpty().ifBlank { "{}" })
+        val json = root.optJSONObject(modelId) ?: return null
+        return runCatching { json.toOpenRouterEndpointDetails(modelId) }.getOrNull()
+    }
+
+    fun setCachedOpenRouterEndpointDetails(details: OpenRouterEndpointDetails) {
+        val root = JSONObject(prefs.getString(KEY_OPENROUTER_ENDPOINT_DETAILS, "{}").orEmpty().ifBlank { "{}" })
+        root.put(details.modelId, details.toJson())
+        prefs.edit().putString(KEY_OPENROUTER_ENDPOINT_DETAILS, root.toString()).apply()
+    }
+
     fun listDictionary(): List<DictionaryEntry> = dao.listDictionary().map { it.toDictionaryEntry() }
 
     fun addDictionaryEntry(phrase: String) {
@@ -375,6 +401,8 @@ class VoiceSlipRepository(context: Context) {
         .put("openRouterPostProcessingModel", config.openRouterPostProcessingModel)
         .put("openRouterAudioDirectModel", config.openRouterAudioDirectModel)
         .put("postProcessingModel", config.postProcessingModel)
+        .put("openRouterProviderSort", getOpenRouterProviderSort().name)
+        .put("openRouterReasoningEffort", getOpenRouterReasoningEffort().name)
         .put("preserveSpokenLanguage", getPreserveSpokenLanguage())
         .put("languageHints", getLanguageHints())
         .toString()
@@ -488,10 +516,10 @@ class VoiceSlipRepository(context: Context) {
     }
 
     private fun setCachedModelList(key: String, models: List<ModelOption>) {
-        val array = JSONArray()
-        models.forEach { array.put(it.toJson()) }
-        prefs.edit().putString(key, array.toString()).apply()
-    }
+    val array = JSONArray()
+    models.forEach { array.put(it.toJson()) }
+    prefs.edit().putString(key, array.toString()).apply()
+}
 
     private fun getStringList(key: String): List<String> {
         val array = JSONArray(prefs.getString(key, "[]"))
@@ -530,6 +558,9 @@ private const val KEY_OPENROUTER_AUDIO_DEFAULTS_SEEDED_VERSION = "openrouter_aud
 private const val OPENROUTER_AUDIO_DEFAULTS_VERSION = 1
 private const val KEY_GROQ_POST_PROCESSING_FAVORITES = "groq_post_processing_favorite_model_ids"
 private const val KEY_OPENROUTER_POST_PROCESSING_FAVORITES = "openrouter_post_processing_favorite_model_ids"
+private const val KEY_OPENROUTER_PROVIDER_SORT = "openrouter_provider_sort"
+private const val KEY_OPENROUTER_REASONING_EFFORT = "openrouter_reasoning_effort"
+private const val KEY_OPENROUTER_ENDPOINT_DETAILS = "openrouter_endpoint_details"
 private const val KEY_PRESERVE_SPOKEN_LANGUAGE = "preserve_spoken_language"
 const val OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID = "OPENROUTER_AUDIO_TRANSCRIPTION"
 
@@ -714,6 +745,7 @@ private fun PipelineConfig.toEntity(): PipelineConfigEntity = PipelineConfigEnti
     postProcessingModel = postProcessingModel,
     groqPostProcessingModel = groqPostProcessingModel,
     openRouterPostProcessingModel = openRouterPostProcessingModel,
+    cerebrasPostProcessingModel = "",
     openRouterAudioDirectModel = openRouterAudioDirectModel
 )
 
@@ -792,13 +824,63 @@ private fun ModelOption.toJson(): JSONObject = JSONObject()
     .put("name", name)
     .put("provider", provider)
     .put("contextLength", contextLength)
+    .put("promptPricePerMillion", promptPricePerMillion)
+    .put("completionPricePerMillion", completionPricePerMillion)
+    .put("supportedParameters", JSONArray().also { array -> supportedParameters.forEach { array.put(it) } })
 
 private fun JSONObject.toModelOption(): ModelOption = ModelOption(
     id = getString("id"),
     name = optString("name", getString("id")),
     provider = optString("provider"),
-    contextLength = if (has("contextLength") && !isNull("contextLength")) optInt("contextLength") else null
+    contextLength = if (has("contextLength") && !isNull("contextLength")) optInt("contextLength") else null,
+    promptPricePerMillion = if (has("promptPricePerMillion") && !isNull("promptPricePerMillion")) optDouble("promptPricePerMillion") else null,
+    completionPricePerMillion = if (has("completionPricePerMillion") && !isNull("completionPricePerMillion")) optDouble("completionPricePerMillion") else null,
+    supportedParameters = optJSONArray("supportedParameters").toStringList()
 )
+
+private fun OpenRouterEndpointDetails.toJson(): JSONObject = JSONObject()
+    .put("modelName", modelName)
+    .put("fetchedAtMillis", fetchedAtMillis)
+    .put("endpoints", JSONArray().also { array -> endpoints.forEach { array.put(it.toJson()) } })
+
+private fun OpenRouterEndpointOption.toJson(): JSONObject = JSONObject()
+    .put("name", name)
+    .put("providerName", providerName)
+    .put("tag", tag)
+    .put("promptPricePerMillion", promptPricePerMillion)
+    .put("completionPricePerMillion", completionPricePerMillion)
+    .put("throughputP50", throughput.p50)
+    .put("latencyP50", latency.p50)
+    .put("uptimeLast30m", uptimeLast30m)
+
+private fun JSONObject.toOpenRouterEndpointDetails(modelId: String): OpenRouterEndpointDetails = OpenRouterEndpointDetails(
+    modelId = modelId,
+    modelName = optString("modelName", modelId),
+    fetchedAtMillis = optLong("fetchedAtMillis"),
+    endpoints = optJSONArray("endpoints").toEndpointOptions()
+)
+
+private fun JSONArray?.toEndpointOptions(): List<OpenRouterEndpointOption> {
+    if (this == null) return emptyList()
+    return (0 until length()).mapNotNull { index ->
+        val json = optJSONObject(index) ?: return@mapNotNull null
+        OpenRouterEndpointOption(
+            name = json.optString("name"),
+            providerName = json.optString("providerName"),
+            tag = json.optString("tag"),
+            promptPricePerMillion = if (json.has("promptPricePerMillion") && !json.isNull("promptPricePerMillion")) json.optDouble("promptPricePerMillion") else null,
+            completionPricePerMillion = if (json.has("completionPricePerMillion") && !json.isNull("completionPricePerMillion")) json.optDouble("completionPricePerMillion") else null,
+            throughput = OpenRouterEndpointMetric(if (json.has("throughputP50") && !json.isNull("throughputP50")) json.optDouble("throughputP50") else null),
+            latency = OpenRouterEndpointMetric(if (json.has("latencyP50") && !json.isNull("latencyP50")) json.optDouble("latencyP50") else null),
+            uptimeLast30m = if (json.has("uptimeLast30m") && !json.isNull("uptimeLast30m")) json.optDouble("uptimeLast30m") else null
+        )
+    }
+}
+
+private fun JSONArray?.toStringList(): List<String> {
+    if (this == null) return emptyList()
+    return (0 until length()).mapNotNull { optString(it).takeIf { value -> value.isNotBlank() } }
+}
 
 private inline fun <reified T : Enum<T>> enumValue(name: String?, default: T): T {
     if (name.isNullOrBlank()) return default

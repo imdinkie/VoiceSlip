@@ -2,6 +2,9 @@ package com.imdinkie.voiceslip.net
 
 import com.imdinkie.voiceslip.data.AudioDirectEngineId
 import com.imdinkie.voiceslip.data.DEFAULT_CLEANUP_POLICY
+import com.imdinkie.voiceslip.data.ModelOption
+import com.imdinkie.voiceslip.data.OpenRouterProviderSort
+import com.imdinkie.voiceslip.data.OpenRouterReasoningEffort
 import com.imdinkie.voiceslip.data.PipelineConfig
 import com.imdinkie.voiceslip.data.PipelineMode
 import com.imdinkie.voiceslip.data.PostProcessingProvider
@@ -10,7 +13,10 @@ import com.imdinkie.voiceslip.data.TranscriptionEngineId
 import java.io.File
 
 class PipelineExecutor(
-    private val keyProvider: (ProviderId) -> String?
+    private val keyProvider: (ProviderId) -> String?,
+    private val openRouterProviderSort: () -> OpenRouterProviderSort = { OpenRouterProviderSort.DEFAULT },
+    private val openRouterReasoningEffort: () -> OpenRouterReasoningEffort = { OpenRouterReasoningEffort.AUTO },
+    private val openRouterModelLookup: (String) -> ModelOption? = { null }
 ) {
     fun execute(
         config: PipelineConfig,
@@ -112,7 +118,10 @@ class PipelineExecutor(
                 audioFile,
                 dictionaryTerms,
                 languageHints,
-                preserveSpokenLanguage
+                preserveSpokenLanguage,
+                openRouterProviderSort(),
+                openRouterReasoningEffort(),
+                supportsOpenRouterReasoning(model)
             )
             if (result.text.isBlank()) throw PipelineException("transcription", "The transcription result was empty.")
             return TranscriptWithEngine("OpenRouter audio $model", ProviderId.OPENROUTER, result)
@@ -166,7 +175,10 @@ class PipelineExecutor(
                 dictionaryTerms = dictionaryTerms,
                 stylePrompt = stylePrompt,
                 cleanupPolicy = cleanupPolicy,
-                preserveSpokenLanguage = preserveSpokenLanguage
+                preserveSpokenLanguage = preserveSpokenLanguage,
+                providerSort = openRouterProviderSort(),
+                reasoningEffort = openRouterReasoningEffort(),
+                supportsReasoning = supportsOpenRouterReasoning(model)
             )
             PostProcessingProvider.NONE -> throw PipelineException("configuration", "Select a post-processing provider.")
         }
@@ -191,7 +203,10 @@ class PipelineExecutor(
                 cleanupPolicy,
                 dictionaryTerms,
                 languageHints,
-                preserveSpokenLanguage
+                preserveSpokenLanguage,
+                openRouterProviderSort(),
+                openRouterReasoningEffort(),
+                supportsOpenRouterReasoning(model)
             )
             if (result.finalText.isBlank()) throw PipelineException("audio_direct", "The audio model returned empty text.")
             return DirectWithEngine("OpenRouter audio $model", ProviderId.OPENROUTER, result)
@@ -202,6 +217,9 @@ class PipelineExecutor(
         if (result.finalText.isBlank()) throw PipelineException("audio_direct", "The audio model returned empty text.")
         return DirectWithEngine(engine.displayName, engine.provider, result)
     }
+
+    private fun supportsOpenRouterReasoning(model: String): Boolean =
+        openRouterModelLookup(model)?.supportedParameters.orEmpty().any { it.equals("reasoning", ignoreCase = true) }
 }
 
 fun outputGuardRejection(text: String, durationMillis: Long): String? {
