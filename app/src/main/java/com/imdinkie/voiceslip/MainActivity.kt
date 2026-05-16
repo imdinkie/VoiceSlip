@@ -81,6 +81,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
@@ -97,6 +98,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -155,7 +157,6 @@ import com.imdinkie.voiceslip.ui.theme.VoiceSlipTheme
 import java.io.File
 import java.util.Date
 import kotlin.math.roundToInt
-import kotlinx.coroutines.launch
 
 private const val SETUP_TAB_INDEX = 0
 private const val HISTORY_TAB_INDEX = 1
@@ -928,8 +929,7 @@ private fun ModelsScreen(
             onToggleFavorite = { provider, modelId ->
                 repository.togglePostProcessingFavorite(provider, modelId)
                 refreshFavorites()
-            },
-            onSelected = { route = ModelsRoute.Main }
+            }
         )
     }
 
@@ -1084,7 +1084,8 @@ private fun AudioModelPickerScreen(
     var pickerState by remember { mutableStateOf(initialAudioModelPickerState(role, config)) }
     var showOpenRouterSettings by remember { mutableStateOf(false) }
     var endpointSheet by remember { mutableStateOf<EndpointSheetState?>(null) }
-    var reasoningSheet by remember { mutableStateOf<ReasoningSelectionState?>(null) }
+    var pendingSelectedScrollId by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
     val activeProvider = pickerState.activeProvider
     val selectedModel = selectedAudioModelId(config, role, activeProvider)
     val providerOptions = when (role) {
@@ -1103,7 +1104,19 @@ private fun AudioModelPickerScreen(
             builtInAudioRows(role, activeProvider)
         }
     }.withOpenRouterRouteSummaries(activeProvider == ProviderId.OPENROUTER, openRouterProviderSort, cachedOpenRouterEndpointDetails)
-    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val selectedRow = rows.firstOrNull { isActiveAudioModel(config, role, activeProvider, it.id) }
+    val listRows = rows.filterNot { selectedRow?.id == it.id }
+    LaunchedEffect(selectedRow?.id, pendingSelectedScrollId, activeProvider) {
+        if (selectedRow != null && pendingSelectedScrollId == selectedRow.id) {
+            listState.scrollUpToSelectedIfNeeded(selectedRowScrollIndex(hasSearch = activeProvider == ProviderId.OPENROUTER))
+            pendingSelectedScrollId = null
+        }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         item { ScreenHeader(audioPickerTitle(role), onBack) }
         item {
             SettingsCard {
@@ -1118,82 +1131,82 @@ private fun AudioModelPickerScreen(
                     Text("Missing ${activeProvider.label} API key", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
                 }
                 if (activeProvider == ProviderId.OPENROUTER) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Routing: ${openRouterProviderSort.label.lowercase()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        OutlinedButton(onClick = { showOpenRouterSettings = true }) {
-                            Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Settings")
-                        }
-                    }
+                    OpenRouterRoutingSummary(openRouterProviderSort, onClick = { showOpenRouterSettings = true })
                 }
             }
         }
         if (activeProvider == ProviderId.OPENROUTER) {
             item {
-                OutlinedTextField(
-                    value = pickerState.query,
-                    onValueChange = { pickerState = pickerState.copy(query = it) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Search models") },
-                    singleLine = true
-                )
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(onClick = onRefresh, enabled = hasOpenRouterKey) { Text("Refresh OpenRouter") }
-                    modelStatus?.let { Text(it, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-                if (!hasOpenRouterKey) {
-                    Text("Add an OpenRouter API key to refresh compatible audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else if (models.isEmpty()) {
-                    Text("Refresh to load compatible OpenRouter audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    OutlinedTextField(
+                        value = pickerState.query,
+                        onValueChange = { pickerState = pickerState.copy(query = it) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Search models") },
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = onRefresh, enabled = hasOpenRouterKey) {
+                                Icon(Icons.Filled.Refresh, contentDescription = "Refresh OpenRouter")
+                            }
+                        }
+                    )
+                    modelStatus?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (!hasOpenRouterKey) {
+                        Text("Add an OpenRouter API key to refresh compatible audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else if (models.isEmpty()) {
+                        Text("Refresh to load compatible OpenRouter audio models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
         if (rows.isEmpty()) {
             item { Text("No models match this search.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        items(rows, key = { it.id }) { row ->
+        selectedRow?.let { row ->
+            item(key = "selected-${row.id}") {
+                PinnedSelectedModel(
+                    row = row,
+                    favorite = activeProvider == ProviderId.OPENROUTER && row.id in favoriteIds,
+                    showFavorite = activeProvider == ProviderId.OPENROUTER,
+                    onClick = {},
+                    onToggleFavorite = { if (activeProvider == ProviderId.OPENROUTER) onToggleFavorite(row.id) },
+                    onShowDetails = openRouterDetailsAction(
+                        enabled = activeProvider == ProviderId.OPENROUTER,
+                        row = row,
+                        onLoadOpenRouterEndpointDetails = onLoadOpenRouterEndpointDetails,
+                        setEndpointSheet = { endpointSheet = it }
+                    ),
+                    reasoningEffort = selectedOpenRouterAudioReasoningEffort(config, role).takeIf {
+                        activeProvider == ProviderId.OPENROUTER && models.firstOrNull { model -> model.id == row.id }.supportsOpenRouterReasoning()
+                    },
+                    onReasoningEffortChange = { effort -> onConfigChange(pickerState.selectModel(config, row.id, effort)) }
+                )
+            }
+        }
+        items(listRows, key = { it.id }) { row ->
             ModelPickerRow(
                 row = row,
-                selected = isActiveAudioModel(config, role, activeProvider, row.id),
+                selected = false,
                 savedForProvider = isSavedAudioModel(config, role, activeProvider, row.id),
                 favorite = activeProvider == ProviderId.OPENROUTER && row.id in favoriteIds,
                 onClick = {
                     val model = models.firstOrNull { it.id == row.id }
-                    if (activeProvider == ProviderId.OPENROUTER && model.supportsOpenRouterReasoning()) {
-                        reasoningSheet = ReasoningSelectionState(
-                            modelId = row.id,
-                            modelName = row.name,
-                            currentEffort = selectedOpenRouterAudioReasoningEffort(config, role)
-                        ) { effort ->
-                            onConfigChange(pickerState.selectModel(config, row.id, effort))
-                            reasoningSheet = null
-                            onBack()
-                        }
+                    val effort = if (activeProvider == ProviderId.OPENROUTER && model.supportsOpenRouterReasoning()) {
+                        OpenRouterReasoningEffort.NONE
                     } else {
-                        onConfigChange(pickerState.selectModel(config, row.id, OpenRouterReasoningEffort.NONE))
-                        onBack()
+                        OpenRouterReasoningEffort.NONE
                     }
+                    onConfigChange(pickerState.selectModel(config, row.id, effort))
+                    pendingSelectedScrollId = row.id
                 },
                 onToggleFavorite = { if (activeProvider == ProviderId.OPENROUTER) onToggleFavorite(row.id) },
                 showFavorite = activeProvider == ProviderId.OPENROUTER,
-                onShowDetails = if (activeProvider == ProviderId.OPENROUTER) {
-                    {
-                        endpointSheet = EndpointSheetState(row.name, row.id, null, "Loading endpoint details...")
-                        onLoadOpenRouterEndpointDetails(row.id) { result ->
-                            endpointSheet = result.fold(
-                                onSuccess = { EndpointSheetState(row.name, row.id, it, null) },
-                                onFailure = { EndpointSheetState(row.name, row.id, null, it.message ?: "Endpoint details failed.") }
-                            )
-                        }
-                    }
-                } else {
-                    null
-                }
+                onShowDetails = openRouterDetailsAction(
+                    enabled = activeProvider == ProviderId.OPENROUTER,
+                    row = row,
+                    onLoadOpenRouterEndpointDetails = onLoadOpenRouterEndpointDetails,
+                    setEndpointSheet = { endpointSheet = it }
+                )
             )
         }
     }
@@ -1206,9 +1219,6 @@ private fun AudioModelPickerScreen(
     }
     endpointSheet?.let { sheet ->
         OpenRouterEndpointDetailsSheet(sheet, openRouterProviderSort, onDismiss = { endpointSheet = null })
-    }
-    reasoningSheet?.let { sheet ->
-        OpenRouterReasoningSheet(sheet, onDismiss = { reasoningSheet = null })
     }
 }
 
@@ -1231,14 +1241,14 @@ private fun PostProcessingPickerScreen(
     cachedOpenRouterEndpointDetails: (String) -> OpenRouterEndpointDetails?,
     onLoadOpenRouterEndpointDetails: (String, (Result<OpenRouterEndpointDetails>) -> Unit) -> Unit,
     onOpenRouterProviderSortChange: (OpenRouterProviderSort) -> Unit,
-    onToggleFavorite: (PostProcessingProvider, String) -> Unit,
-    onSelected: () -> Unit
+    onToggleFavorite: (PostProcessingProvider, String) -> Unit
 ) {
     BackHandler { onBack() }
     var pickerState by remember { mutableStateOf(initialPostProcessingPickerState(config)) }
     var showOpenRouterSettings by remember { mutableStateOf(false) }
     var endpointSheet by remember { mutableStateOf<EndpointSheetState?>(null) }
-    var reasoningSheet by remember { mutableStateOf<ReasoningSelectionState?>(null) }
+    var pendingSelectedScrollId by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
     val activeProvider = pickerState.activeProvider
     val models = when (activeProvider) {
         PostProcessingProvider.GROQ -> groqModels
@@ -1259,7 +1269,19 @@ private fun PostProcessingPickerScreen(
     val rows = remember(models, favoriteIds, selectedModel, pickerState.query, activeProvider) {
         modelRows(models, favoriteIds, selectedModel, pickerState.query, fallbackProvider = activeProvider.label)
     }.withOpenRouterRouteSummaries(activeProvider == PostProcessingProvider.OPENROUTER, openRouterProviderSort, cachedOpenRouterEndpointDetails)
-    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val selectedRow = rows.firstOrNull { isActivePostProcessingModel(config, activeProvider, it.id) }
+    val listRows = rows.filterNot { selectedRow?.id == it.id }
+    LaunchedEffect(selectedRow?.id, pendingSelectedScrollId, activeProvider) {
+        if (selectedRow != null && pendingSelectedScrollId == selectedRow.id) {
+            listState.scrollUpToSelectedIfNeeded(selectedRowScrollIndex(hasSearch = true))
+            pendingSelectedScrollId = null
+        }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         item { ScreenHeader("Choose post-processing model", onBack) }
         item {
             SettingsCard {
@@ -1274,86 +1296,86 @@ private fun PostProcessingPickerScreen(
                     Text("Missing ${activeProvider.label} API key", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
                 }
                 if (activeProvider == PostProcessingProvider.OPENROUTER) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Routing: ${openRouterProviderSort.label.lowercase()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        OutlinedButton(onClick = { showOpenRouterSettings = true }) {
-                            Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Settings")
-                        }
-                    }
+                    OpenRouterRoutingSummary(openRouterProviderSort, onClick = { showOpenRouterSettings = true })
                 }
             }
         }
         item {
-            OutlinedTextField(
-                value = pickerState.query,
-                onValueChange = { pickerState = pickerState.copy(query = it) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Search models") },
-                singleLine = true
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(
-                    onClick = when (activeProvider) {
-                        PostProcessingProvider.GROQ -> onRefreshGroq
-                        PostProcessingProvider.OPENROUTER -> onRefreshOpenRouter
-                        PostProcessingProvider.NONE -> onRefreshGroq
-                    },
-                    enabled = hasKey
-                ) { Text("Refresh ${activeProvider.label}") }
-                modelStatus?.let { Text(it, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-            if (!hasKey) {
-                Text("Add a ${activeProvider.label} API key to refresh models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else if (models.isEmpty()) {
-                Text("Refresh to load ${activeProvider.label} models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedTextField(
+                    value = pickerState.query,
+                    onValueChange = { pickerState = pickerState.copy(query = it) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Search models") },
+                    singleLine = true,
+                    trailingIcon = {
+                        IconButton(
+                            onClick = when (activeProvider) {
+                                PostProcessingProvider.GROQ -> onRefreshGroq
+                                PostProcessingProvider.OPENROUTER -> onRefreshOpenRouter
+                                PostProcessingProvider.NONE -> onRefreshGroq
+                            },
+                            enabled = hasKey
+                        ) {
+                            Icon(Icons.Filled.Refresh, contentDescription = "Refresh ${activeProvider.label}")
+                        }
+                    }
+                )
+                modelStatus?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (!hasKey) {
+                    Text("Add a ${activeProvider.label} API key to refresh models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else if (models.isEmpty()) {
+                    Text("Refresh to load ${activeProvider.label} models.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         if (rows.isEmpty()) {
             item { Text("No models match this search.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        items(rows, key = { it.id }) { row ->
+        selectedRow?.let { row ->
+            item(key = "selected-${row.id}") {
+                PinnedSelectedModel(
+                    row = row,
+                    favorite = row.id in favoriteIds,
+                    showFavorite = true,
+                    onClick = {},
+                    onToggleFavorite = { onToggleFavorite(activeProvider, row.id) },
+                    onShowDetails = openRouterDetailsAction(
+                        enabled = activeProvider == PostProcessingProvider.OPENROUTER,
+                        row = row,
+                        onLoadOpenRouterEndpointDetails = onLoadOpenRouterEndpointDetails,
+                        setEndpointSheet = { endpointSheet = it }
+                    ),
+                    reasoningEffort = config.openRouterPostProcessingReasoningEffort.takeIf {
+                        activeProvider == PostProcessingProvider.OPENROUTER && models.firstOrNull { model -> model.id == row.id }.supportsOpenRouterReasoning()
+                    },
+                    onReasoningEffortChange = { effort -> onConfigChange(pickerState.selectModel(config, row.id, effort)) }
+                )
+            }
+        }
+        items(listRows, key = { it.id }) { row ->
             ModelPickerRow(
                 row = row,
-                selected = isActivePostProcessingModel(config, activeProvider, row.id),
+                selected = false,
                 savedForProvider = isSavedPostProcessingModel(config, activeProvider, row.id),
                 favorite = row.id in favoriteIds,
                 onClick = {
                     val model = models.firstOrNull { it.id == row.id }
-                    if (activeProvider == PostProcessingProvider.OPENROUTER && model.supportsOpenRouterReasoning()) {
-                        reasoningSheet = ReasoningSelectionState(
-                            modelId = row.id,
-                            modelName = row.name,
-                            currentEffort = config.openRouterPostProcessingReasoningEffort
-                        ) { effort ->
-                            onConfigChange(pickerState.selectModel(config, row.id, effort))
-                            reasoningSheet = null
-                            onSelected()
-                        }
+                    val effort = if (activeProvider == PostProcessingProvider.OPENROUTER && model.supportsOpenRouterReasoning()) {
+                        OpenRouterReasoningEffort.NONE
                     } else {
-                        onConfigChange(pickerState.selectModel(config, row.id, OpenRouterReasoningEffort.NONE))
-                        onSelected()
+                        OpenRouterReasoningEffort.NONE
                     }
+                    onConfigChange(pickerState.selectModel(config, row.id, effort))
+                    pendingSelectedScrollId = row.id
                 },
                 onToggleFavorite = { onToggleFavorite(activeProvider, row.id) },
-                onShowDetails = if (activeProvider == PostProcessingProvider.OPENROUTER) {
-                    {
-                        endpointSheet = EndpointSheetState(row.name, row.id, null, "Loading endpoint details...")
-                        onLoadOpenRouterEndpointDetails(row.id) { result ->
-                            endpointSheet = result.fold(
-                                onSuccess = { EndpointSheetState(row.name, row.id, it, null) },
-                                onFailure = { EndpointSheetState(row.name, row.id, null, it.message ?: "Endpoint details failed.") }
-                            )
-                        }
-                    }
-                } else {
-                    null
-                }
+                onShowDetails = openRouterDetailsAction(
+                    enabled = activeProvider == PostProcessingProvider.OPENROUTER,
+                    row = row,
+                    onLoadOpenRouterEndpointDetails = onLoadOpenRouterEndpointDetails,
+                    setEndpointSheet = { endpointSheet = it }
+                )
             )
         }
     }
@@ -1366,9 +1388,6 @@ private fun PostProcessingPickerScreen(
     }
     endpointSheet?.let { sheet ->
         OpenRouterEndpointDetailsSheet(sheet, openRouterProviderSort, onDismiss = { endpointSheet = null })
-    }
-    reasoningSheet?.let { sheet ->
-        OpenRouterReasoningSheet(sheet, onDismiss = { reasoningSheet = null })
     }
 }
 
@@ -1439,6 +1458,155 @@ private fun ModelPickerRow(
     }
 }
 
+@Composable
+private fun PinnedSelectedModel(
+    row: ModelDisplayRow,
+    favorite: Boolean,
+    showFavorite: Boolean,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onShowDetails: (() -> Unit)?,
+    reasoningEffort: OpenRouterReasoningEffort?,
+    onReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit
+) {
+    val contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Selected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        ) {
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(row.name, fontWeight = FontWeight.SemiBold, color = contentColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(modelRowSubtitle(row.withReasoningDetail(reasoningEffort)), color = contentColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (showFavorite) {
+                        onShowDetails?.let {
+                            IconButton(onClick = it) {
+                                Icon(
+                                    imageVector = Icons.Filled.Info,
+                                    contentDescription = "Model details",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        IconButton(onClick = onToggleFavorite) {
+                            Icon(
+                                imageVector = if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                                contentDescription = if (favorite) "Remove favorite" else "Add favorite",
+                                tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                reasoningEffort?.let { effort ->
+                    InlineReasoningPanel(selected = effort, onSelect = onReasoningEffortChange)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun InlineReasoningPanel(
+    selected: OpenRouterReasoningEffort,
+    onSelect: (OpenRouterReasoningEffort) -> Unit
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Filled.Psychology, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Reasoning effort", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            reasoningEffortSelectionOrder.forEach { effort ->
+                CompactReasoningChip(
+                    selected = selected == effort,
+                    label = if (effort == OpenRouterReasoningEffort.NONE) "None · Recommended" else effort.label,
+                    icon = effort.icon(),
+                    onClick = { onSelect(effort) }
+                )
+            }
+        }
+    }
+}
+
+private fun ModelDisplayRow.withReasoningDetail(reasoningEffort: OpenRouterReasoningEffort?): ModelDisplayRow =
+    if (reasoningEffort == null) {
+        this
+    } else {
+        copy(detail = listOf(detail, "🧠 ${reasoningEffort.label}").filter { it.isNotBlank() }.joinToString(" · "))
+    }
+
+private fun openRouterDetailsAction(
+    enabled: Boolean,
+    row: ModelDisplayRow,
+    onLoadOpenRouterEndpointDetails: (String, (Result<OpenRouterEndpointDetails>) -> Unit) -> Unit,
+    setEndpointSheet: (EndpointSheetState) -> Unit
+): (() -> Unit)? = if (enabled) {
+    {
+        setEndpointSheet(EndpointSheetState(row.name, row.id, null, "Loading endpoint details..."))
+        onLoadOpenRouterEndpointDetails(row.id) { result ->
+            setEndpointSheet(
+                result.fold(
+                    onSuccess = { EndpointSheetState(row.name, row.id, it, null) },
+                    onFailure = { EndpointSheetState(row.name, row.id, null, it.message ?: "Endpoint details failed.") }
+                )
+            )
+        }
+    }
+} else {
+    null
+}
+
+private fun selectedRowScrollIndex(hasSearch: Boolean): Int =
+    if (hasSearch) 3 else 2
+
+@Composable
+private fun OpenRouterRoutingSummary(sort: OpenRouterProviderSort, onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 10.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(sort.icon(), contentDescription = null, modifier = Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text("OpenRouter routing", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (sort == OpenRouterProviderSort.THROUGHPUT) "${sort.label} · Recommended" else sort.label,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Filled.Settings, contentDescription = "OpenRouter settings", modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
+private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollUpToSelectedIfNeeded(index: Int) {
+    val visibleSelected = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+    if (visibleSelected == null) {
+        if (firstVisibleItemIndex > index) animateScrollToItem(index)
+        return
+    }
+    if (visibleSelected.offset < layoutInfo.viewportStartOffset) {
+        animateScrollToItem(index)
+    }
+}
+
 private fun modelRowSubtitle(row: ModelDisplayRow): String {
     val availability = if (row.isAvailable) "" else " · Unavailable in latest refresh"
     return "${row.detail}$availability"
@@ -1471,13 +1639,6 @@ private data class EndpointSheetState(
     val modelId: String,
     val details: OpenRouterEndpointDetails?,
     val status: String?
-)
-
-private data class ReasoningSelectionState(
-    val modelId: String,
-    val modelName: String,
-    val currentEffort: OpenRouterReasoningEffort,
-    val onSelect: (OpenRouterReasoningEffort) -> Unit
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1611,37 +1772,6 @@ private val reasoningEffortSelectionOrder = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun OpenRouterReasoningSheet(
-    state: ReasoningSelectionState,
-    onDismiss: () -> Unit
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Reasoning effort", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text(state.modelName, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("Lower reasoning is usually faster for this step.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                reasoningEffortSelectionOrder.forEach { effort ->
-                    CompactChoiceChip(
-                        selected = state.currentEffort == effort,
-                        label = effort.label,
-                        icon = effort.icon(),
-                        onClick = { state.onSelect(effort) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
 private fun OpenRouterSettingsSheet(
     providerSort: OpenRouterProviderSort,
     onProviderSortChange: (OpenRouterProviderSort) -> Unit,
@@ -1667,7 +1797,7 @@ private fun OpenRouterSettingsSheet(
                     OpenRouterProviderSort.entries.forEach { sort ->
                         CompactChoiceChip(
                             selected = providerSort == sort,
-                            label = sort.label,
+                            label = if (sort == OpenRouterProviderSort.THROUGHPUT) "${sort.label} · Recommended" else sort.label,
                             icon = sort.icon(),
                             onClick = { onProviderSortChange(sort) }
                         )
@@ -1693,6 +1823,24 @@ private fun CompactChoiceChip(
         label = { Text(label, maxLines = 1) },
         leadingIcon = {
             Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+    )
+}
+
+@Composable
+private fun CompactReasoningChip(
+    selected: Boolean,
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        modifier = Modifier.height(30.dp).widthIn(min = 66.dp),
+        label = { Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1) },
+        leadingIcon = {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(15.dp))
         }
     )
 }

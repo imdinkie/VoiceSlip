@@ -48,6 +48,10 @@ _Avoid_: selected model
 The provider endpoint VoiceSlip expects OpenRouter to prefer for a model under an explicit routing policy, shown for comparison but not guaranteed at request time.
 _Avoid_: selected provider
 
+**Estimated Fastest Route**:
+An experimental OpenRouter provider endpoint choice that would estimate response time from p50 time to first token plus expected output tokens divided by p50 throughput.
+_Avoid_: smart route when the rule should be measurable
+
 **OpenRouter Model Reasoning Effort**:
 The per-model-slot reasoning effort VoiceSlip sends with an OpenRouter model request when that selected model supports reasoning.
 _Avoid_: provider reasoning setting
@@ -134,6 +138,7 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - A **Model Picker** chooses one model for one **Dictation Pipeline** step.
 - A **Provider Group** belongs inside a **Model Picker**; it is not a separate pipeline decision.
 - OpenRouter provider sorting is configured inside an OpenRouter **Provider Group** and applies to all OpenRouter requests, but remains a routing policy rather than part of the selected model identity.
+- OpenRouter throughput routing is the default routing policy and should be visually recommended in the routing selector, not in per-model route summaries.
 - OpenRouter settings inside a **Provider Group** should only configure shared OpenRouter provider routing, not per-slot reasoning.
 - **OpenRouter Model Reasoning Effort** is stored per OpenRouter model slot in the **Dictation Pipeline**, so transcription, post-processing, and audio-direct selections can use different reasoning levels.
 - **OpenRouter Model Reasoning Effort** belongs to the same persisted pipeline configuration as the selected OpenRouter model ID, not to shared provider preferences.
@@ -145,12 +150,25 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - **OpenRouter Model Reasoning Effort** choices should be shown in one compact selector with None first, followed by Minimal, Low, Medium, High, XHigh, and Auto.
 - Selected OpenRouter model summaries should show **OpenRouter Model Reasoning Effort** only when it is meaningful, using a compact reasoning indicator so values like None are not ambiguous.
 - Selected model summaries should prefer meaningful model display names while keeping exact raw model IDs available in picker rows or detail sheets.
-- For reasoning-capable OpenRouter models, model selection and **OpenRouter Model Reasoning Effort** selection commit together; dismissing the selector leaves the previous model-slot state unchanged.
+- Selecting a model in a **Model Picker** should update the selection in place rather than closing the picker.
+- The in-place selection behavior, pinned selected section, and duplicate exclusion apply to all **Model Pickers**, while inline reasoning controls apply only to reasoning-capable OpenRouter models.
+- For reasoning-capable OpenRouter models, tapping the model selects it immediately with default None when needed, and **OpenRouter Model Reasoning Effort** is edited inline inside the **Model Picker**.
+- In a **Model Picker**, the selected model should appear in a compact pinned selected section directly above the normal model list.
+- The pinned selected section in a **Model Picker** should remain visible even when the search query does not match it.
+- The pinned selected row should keep the normal row actions such as details and favorite toggling.
+- The inline **OpenRouter Model Reasoning Effort** panel should stay visible for the selected reasoning-capable OpenRouter model.
+- Tapping an inline **OpenRouter Model Reasoning Effort** chip updates the selected model slot immediately.
+- The inline **OpenRouter Model Reasoning Effort** panel should feel attached to the selected model row and stay compact enough not to dominate the picker.
+- None should be visually recommended in the inline **OpenRouter Model Reasoning Effort** controls.
+- The normal **Model Picker** list should exclude the model shown in the pinned selected section.
+- If selecting a model changes the pinned selected section, the picker should scroll upward only when the selected row would otherwise be above or clipped above the visible viewport.
+- Model catalog refresh controls should be integrated compactly with model search rather than taking a full-width action row.
 - **Model Picker** headers should use compact navigation controls and leave enough title space for role-specific picker names.
 - Shared OpenRouter settings should be reachable from every OpenRouter **Provider Group** where OpenRouter models can be chosen.
 - Model rows inside a single active **Provider Group** should not repeat that provider name unless they need to distinguish an inactive saved model.
 - Selecting a model in a **Model Picker** changes the active model for that pipeline step; toggling a **Favorite Model** does not.
 - A **Predicted Route** may summarize p50 price, throughput, and latency for OpenRouter model rows when an explicit OpenRouter provider sort is selected.
+- An **Estimated Fastest Route** is a deferred future routing policy, not part of the current OpenRouter routing controls.
 - When OpenRouter default routing is selected, VoiceSlip should show model-level lowest price rather than guessing a **Predicted Route**.
 - OpenRouter route performance summaries use p50 metrics; missing route metrics should be shown as unavailable rather than hidden.
 - OpenRouter endpoint details should be cached separately from model catalogs because endpoint metadata is fetched per model and has different freshness.
