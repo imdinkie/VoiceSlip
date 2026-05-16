@@ -136,13 +136,6 @@ class VoiceSlipRepository(context: Context) {
         prefs.edit().putString(KEY_OPENROUTER_PROVIDER_SORT, sort.name).apply()
     }
 
-    fun getOpenRouterReasoningEffort(): OpenRouterReasoningEffort =
-        enumValue(prefs.getString(KEY_OPENROUTER_REASONING_EFFORT, null), OpenRouterReasoningEffort.AUTO)
-
-    fun setOpenRouterReasoningEffort(effort: OpenRouterReasoningEffort) {
-        prefs.edit().putString(KEY_OPENROUTER_REASONING_EFFORT, effort.name).apply()
-    }
-
     fun getCachedOpenRouterEndpointDetails(modelId: String): OpenRouterEndpointDetails? {
         val root = JSONObject(prefs.getString(KEY_OPENROUTER_ENDPOINT_DETAILS, "{}").orEmpty().ifBlank { "{}" })
         val json = root.optJSONObject(modelId) ?: return null
@@ -393,16 +386,18 @@ class VoiceSlipRepository(context: Context) {
         .put("mistralTranscriptionEngine", config.mistralTranscriptionEngine?.name.orEmpty())
         .put("groqTranscriptionEngine", config.groqTranscriptionEngine?.name.orEmpty())
         .put("openRouterAudioTranscriptionModel", config.openRouterAudioTranscriptionModel)
+        .put("openRouterAudioTranscriptionReasoningEffort", config.openRouterAudioTranscriptionReasoningEffort.name)
         .put("audioDirectEngineKind", config.audioDirectEngineKind.name)
         .put("audioDirectEngine", config.audioDirectEngine.name)
         .put("mistralAudioDirectEngine", config.mistralAudioDirectEngine?.name.orEmpty())
         .put("postProcessingProvider", config.postProcessingProvider.name)
         .put("groqPostProcessingModel", config.groqPostProcessingModel)
         .put("openRouterPostProcessingModel", config.openRouterPostProcessingModel)
+        .put("openRouterPostProcessingReasoningEffort", config.openRouterPostProcessingReasoningEffort.name)
         .put("openRouterAudioDirectModel", config.openRouterAudioDirectModel)
+        .put("openRouterAudioDirectReasoningEffort", config.openRouterAudioDirectReasoningEffort.name)
         .put("postProcessingModel", config.postProcessingModel)
         .put("openRouterProviderSort", getOpenRouterProviderSort().name)
-        .put("openRouterReasoningEffort", getOpenRouterReasoningEffort().name)
         .put("preserveSpokenLanguage", getPreserveSpokenLanguage())
         .put("languageHints", getLanguageHints())
         .toString()
@@ -559,7 +554,6 @@ private const val OPENROUTER_AUDIO_DEFAULTS_VERSION = 1
 private const val KEY_GROQ_POST_PROCESSING_FAVORITES = "groq_post_processing_favorite_model_ids"
 private const val KEY_OPENROUTER_POST_PROCESSING_FAVORITES = "openrouter_post_processing_favorite_model_ids"
 private const val KEY_OPENROUTER_PROVIDER_SORT = "openrouter_provider_sort"
-private const val KEY_OPENROUTER_REASONING_EFFORT = "openrouter_reasoning_effort"
 private const val KEY_OPENROUTER_ENDPOINT_DETAILS = "openrouter_endpoint_details"
 private const val KEY_PRESERVE_SPOKEN_LANGUAGE = "preserve_spoken_language"
 const val OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID = "OPENROUTER_AUDIO_TRANSCRIPTION"
@@ -738,6 +732,7 @@ private fun PipelineConfig.toEntity(): PipelineConfigEntity = PipelineConfigEnti
     mistralTranscriptionEngine = mistralTranscriptionEngine?.name.orEmpty(),
     groqTranscriptionEngine = groqTranscriptionEngine?.name.orEmpty(),
     openRouterAudioTranscriptionModel = openRouterAudioTranscriptionModel,
+    openRouterAudioTranscriptionReasoningEffort = openRouterAudioTranscriptionReasoningEffort.name,
     audioDirectEngineKind = audioDirectEngineKind.name,
     audioDirectEngine = audioDirectEngine.name,
     mistralAudioDirectEngine = mistralAudioDirectEngine?.name.orEmpty(),
@@ -745,7 +740,9 @@ private fun PipelineConfig.toEntity(): PipelineConfigEntity = PipelineConfigEnti
     postProcessingModel = postProcessingModel,
     groqPostProcessingModel = groqPostProcessingModel,
     openRouterPostProcessingModel = openRouterPostProcessingModel,
+    openRouterPostProcessingReasoningEffort = openRouterPostProcessingReasoningEffort.name,
     cerebrasPostProcessingModel = "",
+    openRouterAudioDirectReasoningEffort = openRouterAudioDirectReasoningEffort.name,
     openRouterAudioDirectModel = openRouterAudioDirectModel
 )
 
@@ -758,12 +755,15 @@ private fun PipelineConfigEntity.toPipelineConfig(): PipelineConfig {
         mistralTranscriptionEngine = enumValueOrNull<TranscriptionEngineId>(mistralTranscriptionEngine),
         groqTranscriptionEngine = enumValueOrNull<TranscriptionEngineId>(groqTranscriptionEngine),
         openRouterAudioTranscriptionModel = openRouterAudioTranscriptionModel,
+        openRouterAudioTranscriptionReasoningEffort = enumValue(openRouterAudioTranscriptionReasoningEffort, OpenRouterReasoningEffort.NONE),
         audioDirectEngineKind = enumValue(audioDirectEngineKind, EngineKind.BUILT_IN),
         audioDirectEngine = enumValue(audioDirectEngine, AudioDirectEngineId.MISTRAL_VOXTRAL_SMALL_AUDIO),
         mistralAudioDirectEngine = enumValueOrNull<AudioDirectEngineId>(mistralAudioDirectEngine),
         postProcessingProvider = provider,
         groqPostProcessingModel = groqPostProcessingModel.ifBlank { if (provider == PostProcessingProvider.GROQ) postProcessingModel else "" },
         openRouterPostProcessingModel = openRouterPostProcessingModel.ifBlank { if (provider == PostProcessingProvider.OPENROUTER) postProcessingModel else "" },
+        openRouterPostProcessingReasoningEffort = enumValue(openRouterPostProcessingReasoningEffort, OpenRouterReasoningEffort.NONE),
+        openRouterAudioDirectReasoningEffort = enumValue(openRouterAudioDirectReasoningEffort, OpenRouterReasoningEffort.NONE),
         openRouterAudioDirectModel = openRouterAudioDirectModel
     )
 }

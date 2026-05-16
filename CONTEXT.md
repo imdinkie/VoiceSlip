@@ -48,6 +48,10 @@ _Avoid_: selected model
 The provider endpoint VoiceSlip expects OpenRouter to prefer for a model under an explicit routing policy, shown for comparison but not guaranteed at request time.
 _Avoid_: selected provider
 
+**OpenRouter Model Reasoning Effort**:
+The per-model-slot reasoning effort VoiceSlip sends with an OpenRouter model request when that selected model supports reasoning.
+_Avoid_: provider reasoning setting
+
 **Dictionary During Transcription**:
 The user-facing control for whether saved dictionary entries are sent to the transcription step when the selected model supports them.
 _Avoid_: dictionary routing in UI labels
@@ -96,6 +100,10 @@ _Avoid_: recording when the capture has already stopped
 A completed or failed dictation that remains visible in History with its recording file available for review or retry.
 _Avoid_: history item when distinguishing it from abandoned captures
 
+**Retried Dictation**:
+A retained recording that is submitted again through the current pipeline settings while preserving the originally resolved writing style.
+_Avoid_: replayed dictation when implying old settings should be preserved
+
 **Untrusted Dictation Boundary**:
 The fixed prompt structure that marks dictated transcript or audio content as data to transform rather than instructions to obey.
 _Avoid_: cleanup rule
@@ -126,7 +134,19 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - A **Model Picker** chooses one model for one **Dictation Pipeline** step.
 - A **Provider Group** belongs inside a **Model Picker**; it is not a separate pipeline decision.
 - OpenRouter provider sorting is configured inside an OpenRouter **Provider Group** and applies to all OpenRouter requests, but remains a routing policy rather than part of the selected model identity.
-- OpenRouter reasoning effort is configured inside an OpenRouter **Provider Group** and applies to OpenRouter requests only when the selected model supports reasoning.
+- OpenRouter settings inside a **Provider Group** should only configure shared OpenRouter provider routing, not per-slot reasoning.
+- **OpenRouter Model Reasoning Effort** is stored per OpenRouter model slot in the **Dictation Pipeline**, so transcription, post-processing, and audio-direct selections can use different reasoning levels.
+- **OpenRouter Model Reasoning Effort** belongs to the same persisted pipeline configuration as the selected OpenRouter model ID, not to shared provider preferences.
+- **OpenRouter Model Reasoning Effort** is presented during model selection only when OpenRouter catalog metadata says the selected model supports reasoning.
+- Selecting a reasoning-capable OpenRouter model asks for **OpenRouter Model Reasoning Effort** even when the same model is already selected, because the user may be changing the slot's reasoning level.
+- The default **OpenRouter Model Reasoning Effort** is None; UI guidance should describe lower reasoning as faster for the current model step rather than naming a specific pipeline stage.
+- Auto **OpenRouter Model Reasoning Effort** means no reasoning override is sent; None sends an explicit request to disable reasoning.
+- Every explicit **OpenRouter Model Reasoning Effort** request includes reasoning exclusion so reasoning text cannot become dictation output; Auto omits the reasoning object entirely.
+- **OpenRouter Model Reasoning Effort** choices should be shown in one compact selector with None first, followed by Minimal, Low, Medium, High, XHigh, and Auto.
+- Selected OpenRouter model summaries should show **OpenRouter Model Reasoning Effort** only when it is meaningful, using a compact reasoning indicator so values like None are not ambiguous.
+- Selected model summaries should prefer meaningful model display names while keeping exact raw model IDs available in picker rows or detail sheets.
+- For reasoning-capable OpenRouter models, model selection and **OpenRouter Model Reasoning Effort** selection commit together; dismissing the selector leaves the previous model-slot state unchanged.
+- **Model Picker** headers should use compact navigation controls and leave enough title space for role-specific picker names.
 - Shared OpenRouter settings should be reachable from every OpenRouter **Provider Group** where OpenRouter models can be chosen.
 - Model rows inside a single active **Provider Group** should not repeat that provider name unless they need to distinguish an inactive saved model.
 - Selecting a model in a **Model Picker** changes the active model for that pipeline step; toggling a **Favorite Model** does not.
@@ -134,6 +154,7 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - When OpenRouter default routing is selected, VoiceSlip should show model-level lowest price rather than guessing a **Predicted Route**.
 - OpenRouter route performance summaries use p50 metrics; missing route metrics should be shown as unavailable rather than hidden.
 - OpenRouter endpoint details should be cached separately from model catalogs because endpoint metadata is fetched per model and has different freshness.
+- OpenRouter endpoint details with no endpoint candidates should first show a compact empty state and avoid metric explanations when no metrics are visible.
 - OpenRouter reasoning output should be excluded from model responses so reasoning text does not become insertable dictation output.
 - In compact model rows with both details and favorite actions, the details action appears left of the star and the star remains the far-right action.
 - Model details should open from an explicit details action, not from long-press or row expansion, and should appear as a bottom sheet only when meaningful provider metadata is available.
@@ -156,6 +177,7 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - A new dictation should be visible at the top of History when VoiceSlip is reopened, even before it becomes a **Retained Dictation**.
 - A canceled or accidental capture is not a **Retained Dictation** and should be removed from History while its recording file is deleted.
 - Once setup is complete, History is the primary review surface for **Retained Dictations** when opening VoiceSlip.
+- A **Retried Dictation** should use the current **Dictation Pipeline** and model settings, but preserve the originally resolved style because retry is triggered from the VoiceSlip UI rather than the original **Target App**.
 - Orphaned recording files that are not referenced by **Retained Dictations** should be cleaned up after they are old enough to avoid active-recording races.
 - Screen-awake behavior belongs to active audio capture, not the later **Submitted Dictation** processing window.
 - A **Target App** may resolve from the focused application window, active root, focused editable node, or input editor package; if none is high-confidence, VoiceSlip should treat it as unknown.

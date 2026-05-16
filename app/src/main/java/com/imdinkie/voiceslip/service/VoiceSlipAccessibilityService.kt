@@ -535,9 +535,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 val pipeline = PipelineExecutor(
                     keyProvider = { secretStore.getApiKey(it) },
                     openRouterProviderSort = { repository.getOpenRouterProviderSort() },
-                    openRouterReasoningEffort = { repository.getOpenRouterReasoningEffort() },
                     openRouterModelLookup = { modelId ->
-                        (repository.getCachedModels(com.example.voiceslip.data.ProviderId.OPENROUTER) + repository.getCachedOpenRouterAudioModels())
+                        (repository.getCachedModels(com.imdinkie.voiceslip.data.ProviderId.OPENROUTER) + repository.getCachedOpenRouterAudioModels())
                             .firstOrNull { it.id == modelId }
                     }
                 ).execute(

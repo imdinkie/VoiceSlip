@@ -127,12 +127,15 @@ data class PipelineConfig(
     val mistralTranscriptionEngine: TranscriptionEngineId? = null,
     val groqTranscriptionEngine: TranscriptionEngineId? = null,
     val openRouterAudioTranscriptionModel: String = "",
+    val openRouterAudioTranscriptionReasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.NONE,
     val audioDirectEngineKind: EngineKind = EngineKind.BUILT_IN,
     val audioDirectEngine: AudioDirectEngineId = AudioDirectEngineId.MISTRAL_VOXTRAL_SMALL_AUDIO,
     val mistralAudioDirectEngine: AudioDirectEngineId? = null,
     val postProcessingProvider: PostProcessingProvider = PostProcessingProvider.NONE,
     val groqPostProcessingModel: String = "",
     val openRouterPostProcessingModel: String = "",
+    val openRouterPostProcessingReasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.NONE,
+    val openRouterAudioDirectReasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.NONE,
     val openRouterAudioDirectModel: String = ""
 ) {
     val postProcessingModel: String

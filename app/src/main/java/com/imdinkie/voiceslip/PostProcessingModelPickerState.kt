@@ -1,8 +1,9 @@
 package com.imdinkie.voiceslip
 
-import com.imdinkie.voiceslip.data.ModelOption
 import com.imdinkie.voiceslip.data.AudioDirectEngineId
 import com.imdinkie.voiceslip.data.EngineKind
+import com.imdinkie.voiceslip.data.ModelOption
+import com.imdinkie.voiceslip.data.OpenRouterReasoningEffort
 import com.imdinkie.voiceslip.data.PipelineConfig
 import com.imdinkie.voiceslip.data.PostProcessingProvider
 import com.imdinkie.voiceslip.data.ProviderId
@@ -23,8 +24,20 @@ internal data class PostProcessingPickerState(
     fun switchProvider(provider: PostProcessingProvider): PostProcessingPickerState =
         copy(activeProvider = provider, query = "")
 
-    fun selectModel(config: PipelineConfig, modelId: String): PipelineConfig =
-        config.copy(postProcessingProvider = activeProvider).withPostProcessingModel(modelId)
+    fun selectModel(
+        config: PipelineConfig,
+        modelId: String,
+        reasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.NONE
+    ): PipelineConfig =
+        config.copy(postProcessingProvider = activeProvider)
+            .withPostProcessingModel(modelId)
+            .let {
+                if (activeProvider == PostProcessingProvider.OPENROUTER) {
+                    it.copy(openRouterPostProcessingReasoningEffort = reasoningEffort)
+                } else {
+                    it
+                }
+            }
 }
 
 internal fun initialPostProcessingPickerState(config: PipelineConfig): PostProcessingPickerState =
@@ -62,10 +75,14 @@ internal data class AudioModelPickerState(
     fun switchProvider(provider: ProviderId): AudioModelPickerState =
         copy(activeProvider = provider, query = "")
 
-    fun selectModel(config: PipelineConfig, modelId: String): PipelineConfig =
+    fun selectModel(
+        config: PipelineConfig,
+        modelId: String,
+        reasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.NONE
+    ): PipelineConfig =
         when (role) {
-            AudioModelPickerRole.TRANSCRIPTION -> selectTranscriptionModel(config, activeProvider, modelId)
-            AudioModelPickerRole.AUDIO_DIRECT -> selectAudioDirectModel(config, activeProvider, modelId)
+            AudioModelPickerRole.TRANSCRIPTION -> selectTranscriptionModel(config, activeProvider, modelId, reasoningEffort)
+            AudioModelPickerRole.AUDIO_DIRECT -> selectAudioDirectModel(config, activeProvider, modelId, reasoningEffort)
         }
 }
 
@@ -143,7 +160,12 @@ private fun activeAudioProvider(config: PipelineConfig, role: AudioModelPickerRo
         AudioModelPickerRole.AUDIO_DIRECT -> config.audioDirectProvider()
     }
 
-private fun selectTranscriptionModel(config: PipelineConfig, provider: ProviderId, modelId: String): PipelineConfig =
+private fun selectTranscriptionModel(
+    config: PipelineConfig,
+    provider: ProviderId,
+    modelId: String,
+    reasoningEffort: OpenRouterReasoningEffort
+): PipelineConfig =
     when (provider) {
         ProviderId.MISTRAL, ProviderId.GROQ -> {
             val engine = TranscriptionEngineId.entries.firstOrNull { it.name == modelId } ?: return config
@@ -164,11 +186,17 @@ private fun selectTranscriptionModel(config: PipelineConfig, provider: ProviderI
         }
         ProviderId.OPENROUTER -> config.rememberActiveTranscriptionModel().copy(
             transcriptionEngineKind = EngineKind.OPENROUTER_AUDIO,
-            openRouterAudioTranscriptionModel = modelId
+            openRouterAudioTranscriptionModel = modelId,
+            openRouterAudioTranscriptionReasoningEffort = reasoningEffort
         )
     }
 
-private fun selectAudioDirectModel(config: PipelineConfig, provider: ProviderId, modelId: String): PipelineConfig =
+private fun selectAudioDirectModel(
+    config: PipelineConfig,
+    provider: ProviderId,
+    modelId: String,
+    reasoningEffort: OpenRouterReasoningEffort
+): PipelineConfig =
     when (provider) {
         ProviderId.MISTRAL -> {
             val engine = AudioDirectEngineId.entries.firstOrNull { it.name == modelId } ?: return config
@@ -181,7 +209,8 @@ private fun selectAudioDirectModel(config: PipelineConfig, provider: ProviderId,
         ProviderId.GROQ -> config.rememberActiveAudioDirectModel()
         ProviderId.OPENROUTER -> config.rememberActiveAudioDirectModel().copy(
             audioDirectEngineKind = EngineKind.OPENROUTER_AUDIO,
-            openRouterAudioDirectModel = modelId
+            openRouterAudioDirectModel = modelId,
+            openRouterAudioDirectReasoningEffort = reasoningEffort
         )
     }
 

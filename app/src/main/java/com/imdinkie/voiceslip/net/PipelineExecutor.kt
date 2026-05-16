@@ -15,7 +15,6 @@ import java.io.File
 class PipelineExecutor(
     private val keyProvider: (ProviderId) -> String?,
     private val openRouterProviderSort: () -> OpenRouterProviderSort = { OpenRouterProviderSort.DEFAULT },
-    private val openRouterReasoningEffort: () -> OpenRouterReasoningEffort = { OpenRouterReasoningEffort.AUTO },
     private val openRouterModelLookup: (String) -> ModelOption? = { null }
 ) {
     fun execute(
@@ -57,7 +56,8 @@ class PipelineExecutor(
                     dictionaryTerms,
                     stylePrompt,
                     cleanupPolicy,
-                    preserveSpokenLanguage
+                    preserveSpokenLanguage,
+                    config.openRouterPostProcessingReasoningEffort
                 )
                 PipelineResult(
                     rawTranscript = transcript.result.text,
@@ -120,7 +120,7 @@ class PipelineExecutor(
                 languageHints,
                 preserveSpokenLanguage,
                 openRouterProviderSort(),
-                openRouterReasoningEffort(),
+                config.openRouterAudioTranscriptionReasoningEffort,
                 supportsOpenRouterReasoning(model)
             )
             if (result.text.isBlank()) throw PipelineException("transcription", "The transcription result was empty.")
@@ -151,7 +151,8 @@ class PipelineExecutor(
         dictionaryTerms: List<String>,
         stylePrompt: String,
         cleanupPolicy: String,
-        preserveSpokenLanguage: Boolean
+        preserveSpokenLanguage: Boolean,
+        reasoningEffort: OpenRouterReasoningEffort
     ): PostProcessingResult {
         if (stylePrompt.contains("no intentional rewrite", ignoreCase = true)) {
             return PostProcessingResult(rawTranscript, model.ifBlank { "raw" })
@@ -177,7 +178,7 @@ class PipelineExecutor(
                 cleanupPolicy = cleanupPolicy,
                 preserveSpokenLanguage = preserveSpokenLanguage,
                 providerSort = openRouterProviderSort(),
-                reasoningEffort = openRouterReasoningEffort(),
+                reasoningEffort = reasoningEffort,
                 supportsReasoning = supportsOpenRouterReasoning(model)
             )
             PostProcessingProvider.NONE -> throw PipelineException("configuration", "Select a post-processing provider.")
@@ -205,7 +206,7 @@ class PipelineExecutor(
                 languageHints,
                 preserveSpokenLanguage,
                 openRouterProviderSort(),
-                openRouterReasoningEffort(),
+                config.openRouterAudioDirectReasoningEffort,
                 supportsOpenRouterReasoning(model)
             )
             if (result.finalText.isBlank()) throw PipelineException("audio_direct", "The audio model returned empty text.")

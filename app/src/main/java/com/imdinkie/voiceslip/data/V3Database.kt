@@ -88,6 +88,8 @@ data class PipelineConfigEntity(
     val groqTranscriptionEngine: String,
     @ColumnInfo(defaultValue = "''")
     val openRouterAudioTranscriptionModel: String,
+    @ColumnInfo(defaultValue = "'NONE'")
+    val openRouterAudioTranscriptionReasoningEffort: String,
     @ColumnInfo(defaultValue = "'BUILT_IN'")
     val audioDirectEngineKind: String,
     val audioDirectEngine: String,
@@ -99,8 +101,12 @@ data class PipelineConfigEntity(
     val groqPostProcessingModel: String,
     @ColumnInfo(defaultValue = "''")
     val openRouterPostProcessingModel: String,
+    @ColumnInfo(defaultValue = "'NONE'")
+    val openRouterPostProcessingReasoningEffort: String,
     @ColumnInfo(defaultValue = "''")
     val cerebrasPostProcessingModel: String,
+    @ColumnInfo(defaultValue = "'NONE'")
+    val openRouterAudioDirectReasoningEffort: String,
     @ColumnInfo(defaultValue = "''")
     val openRouterAudioDirectModel: String
 )
@@ -260,7 +266,7 @@ interface VoiceSlipDao {
         EngineDictionaryRoutingEntity::class,
         PromptSettingEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class VoiceSlipDatabase : RoomDatabase() {
@@ -276,7 +282,7 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                     VoiceSlipDatabase::class.java,
                     "voiceslip_v3.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_5, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_5, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .allowMainThreadQueries()
                     .build()
                     .also { instance = it }
@@ -412,6 +418,14 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
         private val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE pipeline_config ADD COLUMN cerebrasPostProcessingModel TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterAudioTranscriptionReasoningEffort TEXT NOT NULL DEFAULT 'NONE'")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterPostProcessingReasoningEffort TEXT NOT NULL DEFAULT 'NONE'")
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterAudioDirectReasoningEffort TEXT NOT NULL DEFAULT 'NONE'")
             }
         }
     }

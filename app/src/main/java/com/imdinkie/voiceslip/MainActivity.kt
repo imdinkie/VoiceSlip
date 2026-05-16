@@ -69,6 +69,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachMoney
@@ -214,7 +215,6 @@ class MainActivity : ComponentActivity() {
                 val result = PipelineExecutor(
                     keyProvider = { secretStore.getApiKey(it) },
                     openRouterProviderSort = { repository.getOpenRouterProviderSort() },
-                    openRouterReasoningEffort = { repository.getOpenRouterReasoningEffort() },
                     openRouterModelLookup = { modelId ->
                         (repository.getCachedModels(ProviderId.OPENROUTER) + repository.getCachedOpenRouterAudioModels())
                             .firstOrNull { it.id == modelId }
@@ -302,7 +302,6 @@ private fun VoiceSlipApp(
     var openRouterModels by remember { mutableStateOf(repository.getCachedModels(ProviderId.OPENROUTER)) }
     var openRouterAudioModels by remember { mutableStateOf(repository.getCachedOpenRouterAudioModels()) }
     var openRouterProviderSort by remember { mutableStateOf(repository.getOpenRouterProviderSort()) }
-    var openRouterReasoningEffort by remember { mutableStateOf(repository.getOpenRouterReasoningEffort()) }
     var modelStatus by remember { mutableStateOf<String?>(null) }
     var appEnabled by remember { mutableStateOf(repository.getAppEnabled()) }
     var haptics by remember { mutableStateOf(repository.getHapticsEnabled()) }
@@ -333,7 +332,6 @@ private fun VoiceSlipApp(
         openRouterModels = repository.getCachedModels(ProviderId.OPENROUTER)
         openRouterAudioModels = repository.getCachedOpenRouterAudioModels()
         openRouterProviderSort = repository.getOpenRouterProviderSort()
-        openRouterReasoningEffort = repository.getOpenRouterReasoningEffort()
         appEnabled = repository.getAppEnabled()
         haptics = repository.getHapticsEnabled()
         bubbleSizeDp = repository.getBubbleSizeDp()
@@ -484,7 +482,6 @@ private fun VoiceSlipApp(
                     openRouterModels = openRouterModels,
                     openRouterAudioModels = openRouterAudioModels,
                     openRouterProviderSort = openRouterProviderSort,
-                    openRouterReasoningEffort = openRouterReasoningEffort,
                     modelStatus = modelStatus,
                     hasMistralKey = mistralKey.isNotBlank(),
                     hasGroqKey = groqKey.isNotBlank(),
@@ -578,10 +575,6 @@ private fun VoiceSlipApp(
                     onOpenRouterProviderSortChange = {
                         openRouterProviderSort = it
                         repository.setOpenRouterProviderSort(it)
-                    },
-                    onOpenRouterReasoningEffortChange = {
-                        openRouterReasoningEffort = it
-                        repository.setOpenRouterReasoningEffort(it)
                     }
                 )
                 STYLE_TAB_INDEX -> StyleScreen(repository = repository)
@@ -851,7 +844,6 @@ private fun ModelsScreen(
     openRouterModels: List<ModelOption>,
     openRouterAudioModels: List<ModelOption>,
     openRouterProviderSort: OpenRouterProviderSort,
-    openRouterReasoningEffort: OpenRouterReasoningEffort,
     modelStatus: String?,
     hasMistralKey: Boolean,
     hasGroqKey: Boolean,
@@ -864,8 +856,7 @@ private fun ModelsScreen(
     onRefreshOpenRouterAudio: () -> Unit,
     cachedOpenRouterEndpointDetails: (String) -> OpenRouterEndpointDetails?,
     onLoadOpenRouterEndpointDetails: (String, (Result<OpenRouterEndpointDetails>) -> Unit) -> Unit,
-    onOpenRouterProviderSortChange: (OpenRouterProviderSort) -> Unit,
-    onOpenRouterReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit
+    onOpenRouterProviderSortChange: (OpenRouterProviderSort) -> Unit
 ) {
     var route by remember { mutableStateOf<ModelsRoute>(ModelsRoute.Main) }
     var favoritesVersion by remember { mutableIntStateOf(0) }
@@ -882,6 +873,8 @@ private fun ModelsScreen(
             repository = repository,
             languageHints = languageHints,
             preserveSpokenLanguage = preserveSpokenLanguage,
+            openRouterModels = openRouterModels,
+            openRouterAudioModels = openRouterAudioModels,
             modelStatus = modelStatus,
             hasMistralKey = hasMistralKey,
             hasGroqKey = hasGroqKey,
@@ -904,13 +897,11 @@ private fun ModelsScreen(
             hasOpenRouterKey = hasOpenRouterKey,
             modelStatus = modelStatus,
             openRouterProviderSort = openRouterProviderSort,
-            openRouterReasoningEffort = openRouterReasoningEffort,
             onBack = { route = ModelsRoute.Main },
             onRefresh = onRefreshOpenRouterAudio,
             cachedOpenRouterEndpointDetails = cachedOpenRouterEndpointDetails,
             onLoadOpenRouterEndpointDetails = onLoadOpenRouterEndpointDetails,
             onOpenRouterProviderSortChange = onOpenRouterProviderSortChange,
-            onOpenRouterReasoningEffortChange = onOpenRouterReasoningEffortChange,
             onConfigChange = onConfigChange,
             onToggleFavorite = {
                 repository.toggleOpenRouterAudioFavorite(it)
@@ -926,7 +917,6 @@ private fun ModelsScreen(
             hasGroqKey = hasGroqKey,
             hasOpenRouterKey = hasOpenRouterKey,
             openRouterProviderSort = openRouterProviderSort,
-            openRouterReasoningEffort = openRouterReasoningEffort,
             modelStatus = modelStatus,
             onBack = { route = ModelsRoute.Main },
             onConfigChange = onConfigChange,
@@ -935,7 +925,6 @@ private fun ModelsScreen(
             cachedOpenRouterEndpointDetails = cachedOpenRouterEndpointDetails,
             onLoadOpenRouterEndpointDetails = onLoadOpenRouterEndpointDetails,
             onOpenRouterProviderSortChange = onOpenRouterProviderSortChange,
-            onOpenRouterReasoningEffortChange = onOpenRouterReasoningEffortChange,
             onToggleFavorite = { provider, modelId ->
                 repository.togglePostProcessingFavorite(provider, modelId)
                 refreshFavorites()
@@ -955,6 +944,8 @@ private fun ModelsMainScreen(
     repository: VoiceSlipRepository,
     languageHints: String,
     preserveSpokenLanguage: Boolean,
+    openRouterModels: List<ModelOption>,
+    openRouterAudioModels: List<ModelOption>,
     modelStatus: String?,
     hasMistralKey: Boolean,
     hasGroqKey: Boolean,
@@ -989,7 +980,7 @@ private fun ModelsMainScreen(
                         modifier = Modifier.clickable { onManageAudioModel(AudioModelPickerRole.TRANSCRIPTION) }
                     ) {
                         Text("Transcription Model", fontWeight = FontWeight.SemiBold)
-                        Text(transcriptionModelSummary(config), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(transcriptionModelSummary(config, openRouterAudioModels), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         transcriptionMissingKeySummary(config, hasMistralKey, hasGroqKey, hasOpenRouterKey)?.let {
                             Text(it, color = MaterialTheme.colorScheme.error)
                         }
@@ -1005,7 +996,7 @@ private fun ModelsMainScreen(
                         modifier = Modifier.clickable { onManageAudioModel(AudioModelPickerRole.AUDIO_DIRECT) }
                     ) {
                         Text("Audio Direct Model", fontWeight = FontWeight.SemiBold)
-                        Text(audioDirectModelSummary(config), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(audioDirectModelSummary(config, openRouterAudioModels), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         audioDirectMissingKeySummary(config, hasMistralKey, hasOpenRouterKey)?.let {
                             Text(it, color = MaterialTheme.colorScheme.error)
                         }
@@ -1022,7 +1013,7 @@ private fun ModelsMainScreen(
                         modifier = Modifier.clickable { onManagePostProcessing() }
                     ) {
                         Text("Post-Processing Model", fontWeight = FontWeight.SemiBold)
-                        Text(postProcessingModelSummary(config), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(postProcessingModelSummary(config, openRouterModels), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         postProcessingMissingKeySummary(config, hasGroqKey, hasOpenRouterKey)?.let {
                             Text(it, color = MaterialTheme.colorScheme.error)
                         }
@@ -1081,13 +1072,11 @@ private fun AudioModelPickerScreen(
     hasOpenRouterKey: Boolean,
     modelStatus: String?,
     openRouterProviderSort: OpenRouterProviderSort,
-    openRouterReasoningEffort: OpenRouterReasoningEffort,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     cachedOpenRouterEndpointDetails: (String) -> OpenRouterEndpointDetails?,
     onLoadOpenRouterEndpointDetails: (String, (Result<OpenRouterEndpointDetails>) -> Unit) -> Unit,
     onOpenRouterProviderSortChange: (OpenRouterProviderSort) -> Unit,
-    onOpenRouterReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit,
     onConfigChange: (PipelineConfig) -> Unit,
     onToggleFavorite: (String) -> Unit
 ) {
@@ -1095,6 +1084,7 @@ private fun AudioModelPickerScreen(
     var pickerState by remember { mutableStateOf(initialAudioModelPickerState(role, config)) }
     var showOpenRouterSettings by remember { mutableStateOf(false) }
     var endpointSheet by remember { mutableStateOf<EndpointSheetState?>(null) }
+    var reasoningSheet by remember { mutableStateOf<ReasoningSelectionState?>(null) }
     val activeProvider = pickerState.activeProvider
     val selectedModel = selectedAudioModelId(config, role, activeProvider)
     val providerOptions = when (role) {
@@ -1131,7 +1121,6 @@ private fun AudioModelPickerScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Routing: ${openRouterProviderSort.label.lowercase()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Reasoning: ${openRouterReasoningEffort.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         OutlinedButton(onClick = { showOpenRouterSettings = true }) {
                             Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1174,8 +1163,21 @@ private fun AudioModelPickerScreen(
                 savedForProvider = isSavedAudioModel(config, role, activeProvider, row.id),
                 favorite = activeProvider == ProviderId.OPENROUTER && row.id in favoriteIds,
                 onClick = {
-                    onConfigChange(pickerState.selectModel(config, row.id))
-                    onBack()
+                    val model = models.firstOrNull { it.id == row.id }
+                    if (activeProvider == ProviderId.OPENROUTER && model.supportsOpenRouterReasoning()) {
+                        reasoningSheet = ReasoningSelectionState(
+                            modelId = row.id,
+                            modelName = row.name,
+                            currentEffort = selectedOpenRouterAudioReasoningEffort(config, role)
+                        ) { effort ->
+                            onConfigChange(pickerState.selectModel(config, row.id, effort))
+                            reasoningSheet = null
+                            onBack()
+                        }
+                    } else {
+                        onConfigChange(pickerState.selectModel(config, row.id, OpenRouterReasoningEffort.NONE))
+                        onBack()
+                    }
                 },
                 onToggleFavorite = { if (activeProvider == ProviderId.OPENROUTER) onToggleFavorite(row.id) },
                 showFavorite = activeProvider == ProviderId.OPENROUTER,
@@ -1198,14 +1200,15 @@ private fun AudioModelPickerScreen(
     if (showOpenRouterSettings) {
         OpenRouterSettingsSheet(
             providerSort = openRouterProviderSort,
-            reasoningEffort = openRouterReasoningEffort,
             onProviderSortChange = onOpenRouterProviderSortChange,
-            onReasoningEffortChange = onOpenRouterReasoningEffortChange,
             onDismiss = { showOpenRouterSettings = false }
         )
     }
     endpointSheet?.let { sheet ->
         OpenRouterEndpointDetailsSheet(sheet, openRouterProviderSort, onDismiss = { endpointSheet = null })
+    }
+    reasoningSheet?.let { sheet ->
+        OpenRouterReasoningSheet(sheet, onDismiss = { reasoningSheet = null })
     }
 }
 
@@ -1220,7 +1223,6 @@ private fun PostProcessingPickerScreen(
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
     openRouterProviderSort: OpenRouterProviderSort,
-    openRouterReasoningEffort: OpenRouterReasoningEffort,
     modelStatus: String?,
     onBack: () -> Unit,
     onConfigChange: (PipelineConfig) -> Unit,
@@ -1229,7 +1231,6 @@ private fun PostProcessingPickerScreen(
     cachedOpenRouterEndpointDetails: (String) -> OpenRouterEndpointDetails?,
     onLoadOpenRouterEndpointDetails: (String, (Result<OpenRouterEndpointDetails>) -> Unit) -> Unit,
     onOpenRouterProviderSortChange: (OpenRouterProviderSort) -> Unit,
-    onOpenRouterReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit,
     onToggleFavorite: (PostProcessingProvider, String) -> Unit,
     onSelected: () -> Unit
 ) {
@@ -1237,6 +1238,7 @@ private fun PostProcessingPickerScreen(
     var pickerState by remember { mutableStateOf(initialPostProcessingPickerState(config)) }
     var showOpenRouterSettings by remember { mutableStateOf(false) }
     var endpointSheet by remember { mutableStateOf<EndpointSheetState?>(null) }
+    var reasoningSheet by remember { mutableStateOf<ReasoningSelectionState?>(null) }
     val activeProvider = pickerState.activeProvider
     val models = when (activeProvider) {
         PostProcessingProvider.GROQ -> groqModels
@@ -1275,7 +1277,6 @@ private fun PostProcessingPickerScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Routing: ${openRouterProviderSort.label.lowercase()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Reasoning: ${openRouterReasoningEffort.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         OutlinedButton(onClick = { showOpenRouterSettings = true }) {
                             Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1323,8 +1324,21 @@ private fun PostProcessingPickerScreen(
                 savedForProvider = isSavedPostProcessingModel(config, activeProvider, row.id),
                 favorite = row.id in favoriteIds,
                 onClick = {
-                    onConfigChange(pickerState.selectModel(config, row.id))
-                    onSelected()
+                    val model = models.firstOrNull { it.id == row.id }
+                    if (activeProvider == PostProcessingProvider.OPENROUTER && model.supportsOpenRouterReasoning()) {
+                        reasoningSheet = ReasoningSelectionState(
+                            modelId = row.id,
+                            modelName = row.name,
+                            currentEffort = config.openRouterPostProcessingReasoningEffort
+                        ) { effort ->
+                            onConfigChange(pickerState.selectModel(config, row.id, effort))
+                            reasoningSheet = null
+                            onSelected()
+                        }
+                    } else {
+                        onConfigChange(pickerState.selectModel(config, row.id, OpenRouterReasoningEffort.NONE))
+                        onSelected()
+                    }
                 },
                 onToggleFavorite = { onToggleFavorite(activeProvider, row.id) },
                 onShowDetails = if (activeProvider == PostProcessingProvider.OPENROUTER) {
@@ -1346,14 +1360,15 @@ private fun PostProcessingPickerScreen(
     if (showOpenRouterSettings) {
         OpenRouterSettingsSheet(
             providerSort = openRouterProviderSort,
-            reasoningEffort = openRouterReasoningEffort,
             onProviderSortChange = onOpenRouterProviderSortChange,
-            onReasoningEffortChange = onOpenRouterReasoningEffortChange,
             onDismiss = { showOpenRouterSettings = false }
         )
     }
     endpointSheet?.let { sheet ->
         OpenRouterEndpointDetailsSheet(sheet, openRouterProviderSort, onDismiss = { endpointSheet = null })
+    }
+    reasoningSheet?.let { sheet ->
+        OpenRouterReasoningSheet(sheet, onDismiss = { reasoningSheet = null })
     }
 }
 
@@ -1458,6 +1473,13 @@ private data class EndpointSheetState(
     val status: String?
 )
 
+private data class ReasoningSelectionState(
+    val modelId: String,
+    val modelName: String,
+    val currentEffort: OpenRouterReasoningEffort,
+    val onSelect: (OpenRouterReasoningEffort) -> Unit
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OpenRouterEndpointDetailsSheet(
@@ -1466,6 +1488,7 @@ private fun OpenRouterEndpointDetailsSheet(
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
+        val endpoints = state.details?.endpoints.orEmpty().sortedFor(providerSort)
         LazyColumn(
             modifier = Modifier.fillMaxWidth().heightIn(max = 620.dp),
             contentPadding = PaddingValues(20.dp),
@@ -1475,12 +1498,13 @@ private fun OpenRouterEndpointDetailsSheet(
                 Text(state.modelName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Text(state.modelId, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("Routing: ${providerSort.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("TTFT is p50 time to first token. Throughput is output tokens per second.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (endpoints.isNotEmpty()) {
+                    Text("TTFT is p50 time to first token. Throughput is output tokens per second.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             state.status?.let { status ->
                 item { Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
-            val endpoints = state.details?.endpoints.orEmpty().sortedFor(providerSort)
             if (endpoints.isNotEmpty()) {
                 item {
                     Text(
@@ -1503,6 +1527,13 @@ private fun OpenRouterEndpointDetailsSheet(
                             }
                         }
                     }
+                }
+            } else if (state.details != null) {
+                item {
+                    Text(
+                        "No endpoint candidates available yet. This model can still be selected; OpenRouter will choose a route at request time.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -1559,13 +1590,61 @@ private fun formatLatencyMillis(value: Double): String {
 
 private fun keepTogether(value: String): String = value.replace(" ", "\u2060\u00A0\u2060").replace("/", "\u2060/\u2060")
 
+private fun ModelOption?.supportsOpenRouterReasoning(): Boolean =
+    this?.supportedParameters.orEmpty().any { it.equals("reasoning", ignoreCase = true) }
+
+private fun selectedOpenRouterAudioReasoningEffort(config: PipelineConfig, role: AudioModelPickerRole): OpenRouterReasoningEffort =
+    when (role) {
+        AudioModelPickerRole.TRANSCRIPTION -> config.openRouterAudioTranscriptionReasoningEffort
+        AudioModelPickerRole.AUDIO_DIRECT -> config.openRouterAudioDirectReasoningEffort
+    }
+
+private val reasoningEffortSelectionOrder = listOf(
+    OpenRouterReasoningEffort.NONE,
+    OpenRouterReasoningEffort.MINIMAL,
+    OpenRouterReasoningEffort.LOW,
+    OpenRouterReasoningEffort.MEDIUM,
+    OpenRouterReasoningEffort.HIGH,
+    OpenRouterReasoningEffort.XHIGH,
+    OpenRouterReasoningEffort.AUTO
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun OpenRouterReasoningSheet(
+    state: ReasoningSelectionState,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Reasoning effort", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(state.modelName, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Lower reasoning is usually faster for this step.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                reasoningEffortSelectionOrder.forEach { effort ->
+                    CompactChoiceChip(
+                        selected = state.currentEffort == effort,
+                        label = effort.label,
+                        icon = effort.icon(),
+                        onClick = { state.onSelect(effort) }
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun OpenRouterSettingsSheet(
     providerSort: OpenRouterProviderSort,
-    reasoningEffort: OpenRouterReasoningEffort,
     onProviderSortChange: (OpenRouterProviderSort) -> Unit,
-    onReasoningEffortChange: (OpenRouterReasoningEffort) -> Unit,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1583,7 +1662,7 @@ private fun OpenRouterSettingsSheet(
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OpenRouterProviderSort.entries.forEach { sort ->
                         CompactChoiceChip(
@@ -1594,31 +1673,6 @@ private fun OpenRouterSettingsSheet(
                         )
                     }
                 }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SettingHeader("Reasoning effort", reasoningEffort.label)
-                Text(
-                    "Auto sends no reasoning override. Other values apply only when the selected model supports reasoning.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
-                ) {
-                    OpenRouterReasoningEffort.entries.forEach { effort ->
-                        CompactChoiceChip(
-                            selected = reasoningEffort == effort,
-                            label = effort.label,
-                            icon = effort.icon(),
-                            onClick = { onReasoningEffortChange(effort) }
-                        )
-                    }
-                }
-                Text(
-                    "Reasoning text is excluded from responses so it never becomes inserted dictation output.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -1687,11 +1741,41 @@ private fun ChoiceColumn(options: List<String>, selected: String, onSelect: (Str
     }
 }
 
-private fun transcriptionModelSummary(config: PipelineConfig): String =
-    "${config.transcriptionProvider().label} · ${config.transcriptionModel()} · ${config.transcriptionDisplayName()}"
+private fun transcriptionModelSummary(config: PipelineConfig, openRouterModels: List<ModelOption>): String =
+    if (config.transcriptionProvider() == ProviderId.OPENROUTER) {
+        openRouterSelectionSummary(
+            modelId = config.openRouterAudioTranscriptionModel,
+            effort = config.openRouterAudioTranscriptionReasoningEffort,
+            model = openRouterModels.firstOrNull { it.id == config.openRouterAudioTranscriptionModel }
+        )
+    } else {
+        "${config.transcriptionProvider().label} · ${config.transcriptionModel()} · ${config.transcriptionDisplayName()}"
+    }
 
-private fun audioDirectModelSummary(config: PipelineConfig): String =
-    "${config.audioDirectProvider().label} · ${config.audioDirectModel()} · ${config.audioDirectDisplayName()}"
+private fun audioDirectModelSummary(config: PipelineConfig, openRouterModels: List<ModelOption>): String =
+    if (config.audioDirectProvider() == ProviderId.OPENROUTER) {
+        openRouterSelectionSummary(
+            modelId = config.openRouterAudioDirectModel,
+            effort = config.openRouterAudioDirectReasoningEffort,
+            model = openRouterModels.firstOrNull { it.id == config.openRouterAudioDirectModel }
+        )
+    } else {
+        "${config.audioDirectProvider().label} · ${config.audioDirectModel()} · ${config.audioDirectDisplayName()}"
+    }
+
+private fun openRouterSelectionSummary(
+    modelId: String,
+    effort: OpenRouterReasoningEffort,
+    model: ModelOption?
+): String {
+    val displayName = model?.name?.takeIf { it.isNotBlank() && it != modelId } ?: modelId.ifBlank { "OpenRouter model" }
+    val reasoning = if (model.supportsOpenRouterReasoning() || effort != OpenRouterReasoningEffort.NONE) {
+        " · 🧠 ${effort.label}"
+    } else {
+        ""
+    }
+    return "OpenRouter · $displayName$reasoning"
+}
 
 private fun audioPickerTitle(role: AudioModelPickerRole): String =
     when (role) {
@@ -1720,9 +1804,16 @@ private fun audioDirectMissingKeySummary(
     ProviderId.GROQ -> null
 }
 
-private fun postProcessingModelSummary(config: PipelineConfig): String {
+private fun postProcessingModelSummary(config: PipelineConfig, openRouterModels: List<ModelOption>): String {
     if (config.postProcessingProvider == PostProcessingProvider.NONE || config.postProcessingModel.isBlank()) {
         return "No Post-Processing Model selected"
+    }
+    if (config.postProcessingProvider == PostProcessingProvider.OPENROUTER) {
+        return openRouterSelectionSummary(
+            modelId = config.openRouterPostProcessingModel,
+            effort = config.openRouterPostProcessingReasoningEffort,
+            model = openRouterModels.firstOrNull { it.id == config.openRouterPostProcessingModel }
+        )
     }
     return "${config.postProcessingProvider.label} · ${config.postProcessingModel}"
 }
@@ -2891,9 +2982,18 @@ private fun PromptSettingsScreen(repository: VoiceSlipRepository, onBack: () -> 
 @Composable
 private fun ScreenHeader(title: String, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = onBack) { Text("Back") }
-        Spacer(Modifier.width(8.dp))
-        Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+        }
+        Spacer(Modifier.width(4.dp))
+        Text(
+            title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
