@@ -54,10 +54,11 @@ jobs:
 
       - name: Generate checksums
         run: |
+          cd app/build/outputs
           sha256sum \
-            app/build/outputs/apk/debug/app-debug.apk \
-            app/build/outputs/apk/release/app-release.apk \
-            > app/build/outputs/voiceslip-apks.sha256
+            apk/debug/app-debug.apk \
+            apk/release/app-release.apk \
+            > voiceslip-apks.sha256
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
