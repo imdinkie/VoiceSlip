@@ -136,6 +136,10 @@ Generated artifact:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
+### Build V1 APK release artifacts
+
+The manual GitHub `Android Release` workflow runs the release quality gate, builds the tester debug APK and signed release APK, and generates checksums. VoiceSlip V1 does not build app bundles because store publication is deferred.
+
 ### Run unit tests
 
 ```bash
@@ -162,6 +166,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - Audio and text may be sent to third-party model providers depending on the selected pipeline.
 - API keys are configured locally in the app.
 - Recordings and history are stored locally by the app unless explicitly deleted.
+- Android backup and device transfer are disabled for V1 so VoiceSlip data stays inside the app install unless the user sends audio/text to a selected provider.
 
 ## Status
 

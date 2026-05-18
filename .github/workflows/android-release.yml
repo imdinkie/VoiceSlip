@@ -31,6 +31,12 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Run lint
+        run: ./gradlew :app:lintDebug
+
       - name: Decode release keystore
         env:
           VOICESLIP_KEYSTORE_BASE64: ${{ secrets.VOICESLIP_KEYSTORE_BASE64 }}
@@ -38,27 +44,29 @@ jobs:
           test -n "$VOICESLIP_KEYSTORE_BASE64"
           printf '%s' "$VOICESLIP_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/voiceslip-release.jks"
 
-      - name: Build signed release artifacts
+      - name: Build debug and signed release APKs
         env:
           VOICESLIP_STORE_FILE: ${{ runner.temp }}/voiceslip-release.jks
           VOICESLIP_STORE_PASSWORD: ${{ secrets.VOICESLIP_STORE_PASSWORD }}
           VOICESLIP_KEY_ALIAS: ${{ secrets.VOICESLIP_KEY_ALIAS }}
           VOICESLIP_KEY_PASSWORD: ${{ secrets.VOICESLIP_KEY_PASSWORD }}
-        run: ./gradlew :app:assembleRelease :app:bundleRelease
+        run: ./gradlew :app:assembleDebug :app:assembleRelease
 
       - name: Generate checksums
         run: |
-          cd app/build/outputs
-          sha256sum apk/release/app-release.apk bundle/release/app-release.aab > voiceslip-release.sha256
+          sha256sum \
+            app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/release/app-release.apk \
+            > app/build/outputs/voiceslip-apks.sha256
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: voiceslip-release-artifacts
+          name: voiceslip-apks
           path: |
+            app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/bundle/release/app-release.aab
-            app/build/outputs/voiceslip-release.sha256
+            app/build/outputs/voiceslip-apks.sha256
           if-no-files-found: error
 
       - name: Create draft GitHub Release
@@ -67,11 +75,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          VoiceSlip APK release artifacts.
+
+          - `app-release.apk`: signed release APK and official V1 installable.
+          - `app-debug.apk`: tester debug APK with separate debug application ID.
+          - `voiceslip-apks.sha256`: checksums for both APKs.
+
+          App bundles are not produced for this release because store publication is deferred.
+          NOTES
           gh release create "$RELEASE_TAG" \
+            app/build/outputs/apk/debug/app-debug.apk \
             app/build/outputs/apk/release/app-release.apk \
-            app/build/outputs/bundle/release/app-release.aab \
-            app/build/outputs/voiceslip-release.sha256 \
+            app/build/outputs/voiceslip-apks.sha256 \
             --draft \
             --target "$GITHUB_SHA" \
             --title "VoiceSlip $RELEASE_TAG" \
-            --notes "Signed Android release artifacts."
+            --notes-file "$RUNNER_TEMP/release-notes.md"

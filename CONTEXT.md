@@ -124,6 +124,26 @@ _Avoid_: bubble status
 An editor whose contents are credentials or similarly secret input that VoiceSlip should not expose for dictation.
 _Avoid_: sensitive field when referring to passwords, PINs, OTPs, CVVs, or card numbers
 
+**V1 Privacy Boundary**:
+The first-release commitment that VoiceSlip data stays on the device unless the user sends it to a selected model provider or explicitly removes it.
+_Avoid_: local storage when discussing backup or device-transfer behavior
+
+**Release Quality Gate**:
+The automated verification a build must pass before it can be treated as a first-release artifact.
+_Avoid_: CI when referring to the product-release standard rather than the automation system
+
+**GitHub APK Release**:
+The V1 distribution path where VoiceSlip publishes installable APK artifacts through a GitHub Release instead of preparing store bundles.
+_Avoid_: store release when no app store submission is intended
+
+**Tester Debug APK**:
+An installable debug build published for trusted testers under the debug application identity, separate from the official release app.
+_Avoid_: release APK when referring to tester-only debug builds
+
+**Release Signing Key**:
+The long-lived Android signing identity that makes GitHub APK updates install over earlier VoiceSlip release APKs.
+_Avoid_: upload key when no app-store signing handoff is involved
+
 **Private Editor**:
 An editor that asks keyboards not to learn from input but is not necessarily a **Secret Field**.
 _Avoid_: sensitive field when referring to browser address bars or no-personalized-learning editors
@@ -202,6 +222,13 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - **Accessibility Setup Status** does not imply that the bubble is visible, because VoiceSlip may intentionally hide the bubble in its own app or unsuitable fields.
 - A **Secret Field** always prevents VoiceSlip from showing the floating bubble or inserting dictated text.
 - A **Private Editor** does not hide the floating bubble or block insertion by itself.
+- The **V1 Privacy Boundary** excludes recordings, transcripts, API keys, model metadata, app routing data, and cached app icons from Android backup and device transfer.
+- The **Release Quality Gate** for V1 includes unit tests, lint, and APK artifact generation; a written manual device test matrix is not required for V1.
+- A **GitHub APK Release** includes installable debug and release APKs plus checksums; app bundles are deferred until store publication is actually intended.
+- A **Tester Debug APK** is published for trusted testing but is not the official V1 installable; it uses the debug application identity and can coexist with the release app.
+- The **Release Signing Key** is the update identity for GitHub APK releases; unsigned release APKs are not V1 artifacts.
+- V1 release APKs may be unminified; code shrinking is a post-V1 hardening concern unless APK size or release testing demands it sooner.
+- **Dictionary Entry Priority** is part of the intended dictionary model but is not required for the first V1 hardening pass.
 
 ## Example dialogue
 
@@ -235,3 +262,5 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - "New history entry" could mean a completed result or any newly visible dictation. Resolved: a dictation counts as new by id when it first appears in History; later status updates to that same id should not force another scroll.
 - "Unknown app" could be resolved using the last seen foreground app. Rejected: **Target App** must come from high-confidence current editor/window signals to avoid applying the wrong style.
 - "Sensitive field" was used for both password-class editors and no-personalized-learning editors. Resolved: use **Secret Field** for password/PIN/OTP/CVV/card input and **Private Editor** for no-personalized-learning fields such as browser address bars.
+- "Local storage" could still include Android cloud backup or device transfer. Resolved: the **V1 Privacy Boundary** excludes VoiceSlip data from both.
+- "Release artifact" could include app bundles by default. Resolved: a V1 **GitHub APK Release** does not build or publish app bundles.

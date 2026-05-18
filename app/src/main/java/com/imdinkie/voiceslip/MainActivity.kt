@@ -1641,7 +1641,7 @@ private data class EndpointSheetState(
     val status: String?
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun OpenRouterEndpointDetailsSheet(
     state: EndpointSheetState,

@@ -34,6 +34,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.annotation.RequiresApi
 import com.imdinkie.voiceslip.audio.VoiceRecorder
 import com.imdinkie.voiceslip.data.HistoryItem
 import com.imdinkie.voiceslip.data.PipelineConfig
@@ -94,6 +95,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         if (instance === this) instance = null
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreateInputMethod(): InputMethod {
         return VoiceSlipInputMethod(this).also { accessibilityInputMethod = it }
     }
@@ -139,7 +141,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val activePackage = activeApplicationPackage()
         if (activePackage == packageName) return false
         val node = findFocusedEditableNode()
-        val secretField = (node != null && isSensitiveNode(node)) || accessibilityInputMethod?.isSensitiveEditor() == true
+        val secretField = (node != null && isSensitiveNode(node)) || inputMethodIsSensitiveEditor()
         return shouldShowBubbleForField(secretField = secretField)
     }
 
@@ -153,7 +155,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }?.root?.packageName?.toString()
         val activeRootPackage = rootInActiveWindow?.packageName?.toString()
         val editableNodePackage = findFocusedEditableNode()?.packageName?.toString()
-        val inputEditorPackage = accessibilityInputMethod?.targetPackageName()
+        val inputEditorPackage = inputMethodTargetPackageName()
         return resolveTargetAppPackage(
             focusedWindowPackage = focusedWindowPackage,
             activeRootPackage = activeRootPackage,
@@ -636,18 +638,16 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }
 
         val inputMethod = accessibilityInputMethod
-        if (inputMethod?.isSensitiveEditor() == true) {
+        if (inputMethodIsSensitiveEditor()) {
             Log.d(TAG, "Insertion blocked: sensitive input editor")
             return InsertionResult.FAILED_SENSITIVE_FIELD
         }
 
         val tryInputMethodFirst = shouldTryAccessibilityInputMethodBeforeFocusedNode(node != null)
         if (tryInputMethodFirst) {
-            inputMethod?.let {
-                if (it.commitText(text)) {
-                    Log.d(TAG, "Insertion attempted via accessibility input method")
-                    return InsertionResult.INSERTED_VIA_INPUT_METHOD
-                }
+            if (commitViaInputMethod(inputMethod, text)) {
+                Log.d(TAG, "Insertion attempted via accessibility input method")
+                return InsertionResult.INSERTED_VIA_INPUT_METHOD
             }
         }
 
@@ -667,11 +667,9 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }
 
         if (!tryInputMethodFirst) {
-            inputMethod?.let {
-                if (it.commitText(text)) {
-                    Log.d(TAG, "Insertion attempted via accessibility input method")
-                    return InsertionResult.INSERTED_VIA_INPUT_METHOD
-                }
+            if (commitViaInputMethod(inputMethod, text)) {
+                Log.d(TAG, "Insertion attempted via accessibility input method")
+                return InsertionResult.INSERTED_VIA_INPUT_METHOD
             }
         }
 
@@ -719,6 +717,27 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val clipboard = getSystemService(ClipboardManager::class.java)
         clipboard.setPrimaryClip(ClipData.newPlainText("VoiceSlip transcription", text))
     }
+
+    private fun inputMethodTargetPackageName(): String? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            accessibilityInputMethod?.targetPackageName()
+        } else {
+            null
+        }
+
+    private fun inputMethodIsSensitiveEditor(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            accessibilityInputMethod?.isSensitiveEditor() == true
+        } else {
+            false
+        }
+
+    private fun commitViaInputMethod(inputMethod: VoiceSlipInputMethod?, text: String): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            inputMethod?.commitText(text) == true
+        } else {
+            false
+        }
 
     private fun insertionToast(errorStage: String?): String? {
         return when (errorStage) {
@@ -830,6 +849,7 @@ private enum class InsertionResult(
     FAILED_INSERTION("Could not insert into the focused field.", "insertion_failed")
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private class VoiceSlipInputMethod(service: VoiceSlipAccessibilityService) : InputMethod(service) {
     fun targetPackageName(): String? = currentInputEditorInfo?.packageName
 

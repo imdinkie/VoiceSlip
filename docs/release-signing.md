@@ -3,7 +3,7 @@
 VoiceSlip release builds use the application ID `com.imdinkie.voiceslip`.
 Debug builds use `com.imdinkie.voiceslip.debug`.
 
-Agents must only install debug APKs. Release APKs, AABs, universal APKs, and store-built artifacts must never be installed by automation unless explicitly requested in the current conversation.
+Agents must only install debug APKs. Release APKs, app bundles, universal APKs, and store-built artifacts must never be installed by automation unless explicitly requested in the current conversation.
 
 ## Local Signing
 
@@ -29,10 +29,14 @@ VOICESLIP_KEY_ALIAS
 VOICESLIP_KEY_PASSWORD
 ```
 
-The workflow builds:
+The workflow verifies the release quality gate, then builds:
 
+- `app-debug.apk`
 - `app-release.apk`
-- `app-release.aab`
-- `voiceslip-release.sha256`
+- `voiceslip-apks.sha256`
 
 If a `release_tag` input is provided, the workflow creates a draft GitHub Release with those artifacts.
+
+The debug APK is a tester build with the separate debug application ID. The signed release APK is the official V1 installable and must continue using the same release signing key so future GitHub APK releases can update over existing installs.
+
+App bundles are intentionally not built for V1 because store publication is deferred.
