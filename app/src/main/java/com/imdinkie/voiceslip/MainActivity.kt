@@ -142,6 +142,10 @@ import com.imdinkie.voiceslip.data.STYLE_CASUAL
 import com.imdinkie.voiceslip.data.VoiceCategory
 import com.imdinkie.voiceslip.data.VoiceSlipRepository
 import com.imdinkie.voiceslip.data.VoiceStyle
+import com.imdinkie.voiceslip.audio.AudioDerivativeConverter
+import com.imdinkie.voiceslip.audio.audioFileFormat
+import com.imdinkie.voiceslip.audio.recordingFormatFor
+import com.imdinkie.voiceslip.audio.requiredUploadFormatFor
 import com.imdinkie.voiceslip.net.GroqClient
 import com.imdinkie.voiceslip.net.GitHubRelease
 import com.imdinkie.voiceslip.net.GitHubReleasesClient
@@ -158,6 +162,7 @@ import com.imdinkie.voiceslip.net.isReleaseNewer
 import com.imdinkie.voiceslip.net.outputGuardRejection
 import com.imdinkie.voiceslip.service.VoiceSlipAccessibilityService
 import com.imdinkie.voiceslip.ui.theme.VoiceSlipTheme
+import org.json.JSONObject
 import java.io.File
 import java.util.Date
 import kotlin.math.roundToInt
@@ -210,6 +215,7 @@ class MainActivity : ComponentActivity() {
         repository.upsertHistory(item.copy(status = RecordingStatus.TRANSCRIBING, error = null))
         Thread {
             val updated = runCatching {
+                val uploadFile = AudioDerivativeConverter().fileForUpload(File(item.audioPath), requiredUploadFormatFor(config))
                 val dictionary = repository.listDictionary().map { it.phrase }
                 val transcriptionDictionary = if (config.mode == PipelineMode.AUDIO_DIRECT) {
                     dictionary
@@ -226,7 +232,7 @@ class MainActivity : ComponentActivity() {
                     }
                 ).execute(
                     config = config,
-                    audioFile = File(item.audioPath),
+                    audioFile = uploadFile,
                     dictionaryTerms = dictionary,
                     transcriptionDictionaryTerms = transcriptionDictionary,
                     styleId = item.resolvedStyleId ?: STYLE_CASUAL,
@@ -263,10 +269,13 @@ class MainActivity : ComponentActivity() {
                     stylePreset = result.stylePreset,
                     pipelineSummary = result.pipelineSummary,
                     errorStage = null,
-                    metadataJson = result.metadataJson,
+                    metadataJson = audioMetadata(result.metadataJson, item.audioPath, uploadFile),
                     retryCount = item.retryCount + 1
                 )
             }.getOrElse {
+                if (audioFileFormat(File(item.audioPath))?.name == "M4A" && isAudioFormatFailure(it)) {
+                    repository.rememberWavForAudioConsumer(config)
+                }
                 item.copy(
                     status = RecordingStatus.FAILED,
                     error = it.message ?: it::class.java.simpleName,
@@ -282,6 +291,23 @@ class MainActivity : ComponentActivity() {
         val clipboard = getSystemService(ClipboardManager::class.java)
         clipboard.setPrimaryClip(ClipData.newPlainText("VoiceSlip transcription", text))
     }
+}
+
+private fun audioMetadata(existing: String?, originalPath: String, uploadFile: File): String {
+    val original = File(originalPath)
+    val metadata = JSONObject()
+        .put("type", "voiceslip_audio")
+        .put("originalFile", original.name)
+        .put("originalFormat", audioFileFormat(original)?.label ?: original.extension)
+        .put("uploadedFile", uploadFile.name)
+        .put("uploadedFormat", audioFileFormat(uploadFile)?.label ?: uploadFile.extension)
+        .put("conversionUsed", original.absolutePath != uploadFile.absolutePath)
+    return listOfNotNull(existing?.takeIf { it.isNotBlank() }, metadata.toString()).joinToString("\n")
+}
+
+private fun isAudioFormatFailure(error: Throwable): Boolean {
+    val message = error.message.orEmpty().lowercase()
+    return listOf("audio format", "invalid audio", "failed to load audio", "valid mp3 or wav", "unsupported format").any { it in message }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -300,6 +326,7 @@ private fun VoiceSlipApp(
     var mistralKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.MISTRAL).orEmpty()) }
     var groqKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.GROQ).orEmpty()) }
     var openRouterKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()) }
+    var elevenLabsKey by remember { mutableStateOf(secretStore.getApiKey(ProviderId.ELEVENLABS).orEmpty()) }
     var pipelineConfig by remember { mutableStateOf(repository.getPipelineConfig()) }
     var languageHints by remember { mutableStateOf(repository.getLanguageHints()) }
     var preserveSpokenLanguage by remember { mutableStateOf(repository.getPreserveSpokenLanguage()) }
@@ -333,6 +360,7 @@ private fun VoiceSlipApp(
         mistralKey = secretStore.getApiKey(ProviderId.MISTRAL).orEmpty()
         groqKey = secretStore.getApiKey(ProviderId.GROQ).orEmpty()
         openRouterKey = secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()
+        elevenLabsKey = secretStore.getApiKey(ProviderId.ELEVENLABS).orEmpty()
         pipelineConfig = repository.getPipelineConfig()
         languageHints = repository.getLanguageHints()
         preserveSpokenLanguage = repository.getPreserveSpokenLanguage()
@@ -358,14 +386,15 @@ private fun VoiceSlipApp(
             lifecycleOwner?.lifecycle?.removeObserver(observer)
         }
     }
-    val setupStatus = remember(refreshTick, mistralKey, groqKey, openRouterKey, pipelineConfig) {
+    val setupStatus = remember(refreshTick, mistralKey, groqKey, openRouterKey, elevenLabsKey, pipelineConfig) {
         currentSetupStatus(
             context = context,
             config = pipelineConfig,
             keys = mapOf(
                 ProviderId.MISTRAL to mistralKey,
                 ProviderId.GROQ to groqKey,
-                ProviderId.OPENROUTER to openRouterKey
+                ProviderId.OPENROUTER to openRouterKey,
+                ProviderId.ELEVENLABS to elevenLabsKey
             )
         )
     }
@@ -481,6 +510,7 @@ private fun VoiceSlipApp(
                     mistralKey = mistralKey,
                     groqKey = groqKey,
                     openRouterKey = openRouterKey,
+                    elevenLabsKey = elevenLabsKey,
                     appEnabled = appEnabled,
                     haptics = haptics,
                     bubbleSizeDp = bubbleSizeDp,
@@ -493,6 +523,7 @@ private fun VoiceSlipApp(
                             ProviderId.MISTRAL -> mistralKey = key
                             ProviderId.GROQ -> groqKey = key
                             ProviderId.OPENROUTER -> openRouterKey = key
+                            ProviderId.ELEVENLABS -> elevenLabsKey = key
                         }
                         secretStore.saveApiKey(provider, key)
                     },
@@ -551,6 +582,7 @@ private fun VoiceSlipApp(
                     hasMistralKey = mistralKey.isNotBlank(),
                     hasGroqKey = groqKey.isNotBlank(),
                     hasOpenRouterKey = openRouterKey.isNotBlank(),
+                    hasElevenLabsKey = elevenLabsKey.isNotBlank(),
                     onConfigChange = {
                         pipelineConfig = it
                         repository.setPipelineConfig(it)
@@ -718,7 +750,8 @@ private fun initialSetupStatus(
         keys = mapOf(
             ProviderId.MISTRAL to secretStore.getApiKey(ProviderId.MISTRAL).orEmpty(),
             ProviderId.GROQ to secretStore.getApiKey(ProviderId.GROQ).orEmpty(),
-            ProviderId.OPENROUTER to secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty()
+            ProviderId.OPENROUTER to secretStore.getApiKey(ProviderId.OPENROUTER).orEmpty(),
+            ProviderId.ELEVENLABS to secretStore.getApiKey(ProviderId.ELEVENLABS).orEmpty()
         )
     )
 
@@ -727,6 +760,7 @@ private fun SetupScreen(
     mistralKey: String,
     groqKey: String,
     openRouterKey: String,
+    elevenLabsKey: String,
     appEnabled: Boolean,
     haptics: Boolean,
     bubbleSizeDp: Int,
@@ -883,6 +917,13 @@ private fun SetupScreen(
                         linkUrl = "https://openrouter.ai/settings/keys",
                         onChange = { onProviderKeyChange(ProviderId.OPENROUTER, it) }
                     )
+                    ProviderKeyField(
+                        label = "ElevenLabs API key",
+                        value = elevenLabsKey,
+                        linkLabel = "Open ElevenLabs API keys",
+                        linkUrl = "https://elevenlabs.io/app/settings/api-keys",
+                        onChange = { onProviderKeyChange(ProviderId.ELEVENLABS, it) }
+                    )
                     Text(
                         "Keys are stored only on this device using Android Keystore-backed encryption. Recording is blocked only when the selected pipeline is missing a required key.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -1003,6 +1044,7 @@ private fun ModelsScreen(
     hasMistralKey: Boolean,
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
+    hasElevenLabsKey: Boolean,
     onConfigChange: (PipelineConfig) -> Unit,
     onLanguageHintsChange: (String) -> Unit,
     onPreserveSpokenLanguageChange: (Boolean) -> Unit,
@@ -1034,6 +1076,7 @@ private fun ModelsScreen(
             hasMistralKey = hasMistralKey,
             hasGroqKey = hasGroqKey,
             hasOpenRouterKey = hasOpenRouterKey,
+            hasElevenLabsKey = hasElevenLabsKey,
             listState = mainListState,
             onConfigChange = onConfigChange,
             onLanguageHintsChange = onLanguageHintsChange,
@@ -1050,6 +1093,7 @@ private fun ModelsScreen(
             hasMistralKey = hasMistralKey,
             hasGroqKey = hasGroqKey,
             hasOpenRouterKey = hasOpenRouterKey,
+            hasElevenLabsKey = hasElevenLabsKey,
             modelStatus = modelStatus,
             openRouterProviderSort = openRouterProviderSort,
             onBack = { route = ModelsRoute.Main },
@@ -1104,6 +1148,7 @@ private fun ModelsMainScreen(
     hasMistralKey: Boolean,
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
+    hasElevenLabsKey: Boolean,
     listState: androidx.compose.foundation.lazy.LazyListState,
     onConfigChange: (PipelineConfig) -> Unit,
     onLanguageHintsChange: (String) -> Unit,
@@ -1135,7 +1180,7 @@ private fun ModelsMainScreen(
                     ) {
                         Text("Transcription Model", fontWeight = FontWeight.SemiBold)
                         Text(transcriptionModelSummary(config, openRouterAudioModels), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        transcriptionMissingKeySummary(config, hasMistralKey, hasGroqKey, hasOpenRouterKey)?.let {
+                        transcriptionMissingKeySummary(config, hasMistralKey, hasGroqKey, hasOpenRouterKey, hasElevenLabsKey)?.let {
                             Text(it, color = MaterialTheme.colorScheme.error)
                         }
                         OutlinedButton(
@@ -1191,7 +1236,7 @@ private fun ModelsMainScreen(
                 )
             }
             item {
-                ActivePipelineCard(config)
+                ActivePipelineCard(repository, config)
             }
             item {
                 SettingsCard {
@@ -1224,6 +1269,7 @@ private fun AudioModelPickerScreen(
     hasMistralKey: Boolean,
     hasGroqKey: Boolean,
     hasOpenRouterKey: Boolean,
+    hasElevenLabsKey: Boolean,
     modelStatus: String?,
     openRouterProviderSort: OpenRouterProviderSort,
     onBack: () -> Unit,
@@ -1243,13 +1289,14 @@ private fun AudioModelPickerScreen(
     val activeProvider = pickerState.activeProvider
     val selectedModel = selectedAudioModelId(config, role, activeProvider)
     val providerOptions = when (role) {
-        AudioModelPickerRole.TRANSCRIPTION -> listOf(ProviderId.MISTRAL, ProviderId.GROQ, ProviderId.OPENROUTER)
+        AudioModelPickerRole.TRANSCRIPTION -> listOf(ProviderId.MISTRAL, ProviderId.GROQ, ProviderId.ELEVENLABS, ProviderId.OPENROUTER)
         AudioModelPickerRole.AUDIO_DIRECT -> listOf(ProviderId.MISTRAL, ProviderId.OPENROUTER)
     }
     val hasKey = when (activeProvider) {
         ProviderId.MISTRAL -> hasMistralKey
         ProviderId.GROQ -> hasGroqKey
         ProviderId.OPENROUTER -> hasOpenRouterKey
+        ProviderId.ELEVENLABS -> hasElevenLabsKey
     }
     val rows = remember(role, activeProvider, models, favoriteIds, selectedModel, pickerState.query) {
         if (activeProvider == ProviderId.OPENROUTER) {
@@ -1782,7 +1829,7 @@ private fun OpenRouterEndpointDetails.predictedRouteSummary(providerSort: OpenRo
     endpoints.sortedFor(providerSort).firstOrNull()?.let { endpoint ->
         listOf(
             endpoint.providerName.ifBlank { endpoint.name },
-            endpoint.pricePair(),
+            endpoint.pricePair(showUnit = false),
             endpoint.throughput.p50?.let { keepTogether("${formatNumber(it)} t/s") } ?: keepTogether("speed n/a"),
             endpoint.latency.p50?.let { keepTogether("${formatLatencyMillis(it)} TTFT") } ?: keepTogether("TTFT n/a")
         ).joinToString(" · ")
@@ -1835,7 +1882,7 @@ private fun OpenRouterEndpointDetailsSheet(
                                 Text(endpoint.tag, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                MetricChip(Icons.Filled.AttachMoney, endpoint.pricePair())
+                                MetricChip(Icons.Filled.AttachMoney, endpoint.pricePair(showUnit = true))
                                 MetricChip(Icons.Filled.Speed, endpoint.throughput.p50?.let { "${formatNumber(it)} t/s" } ?: "speed n/a")
                                 MetricChip(Icons.Filled.Timer, endpoint.latency.p50?.let { "${formatLatencyMillis(it)} TTFT" } ?: "TTFT n/a")
                                 MetricChip(Icons.Filled.Percent, endpoint.uptimeLast30m?.let { "uptime ${formatNumber(it)}%" } ?: "uptime n/a")
@@ -1886,10 +1933,12 @@ private fun MetricChip(icon: ImageVector, label: String) {
     }
 }
 
-private fun com.imdinkie.voiceslip.data.OpenRouterEndpointOption.pricePair(): String {
+private fun com.imdinkie.voiceslip.data.OpenRouterEndpointOption.pricePair(showUnit: Boolean): String {
     val input = promptPricePerMillion
     val output = completionPricePerMillion
-    return if (input != null && output != null) "${formatMoney(input)}/${formatMoney(output)}" else "price n/a"
+    if (input == null || output == null) return "price n/a"
+    val unit = if (showUnit) " per MTok" else ""
+    return "${formatMoney(input)}/${formatMoney(output)}$unit"
 }
 
 private fun formatMoney(value: Double): String =
@@ -2089,11 +2138,13 @@ private fun transcriptionMissingKeySummary(
     config: PipelineConfig,
     hasMistralKey: Boolean,
     hasGroqKey: Boolean,
-    hasOpenRouterKey: Boolean
+    hasOpenRouterKey: Boolean,
+    hasElevenLabsKey: Boolean
 ): String? = when (config.transcriptionProvider()) {
     ProviderId.MISTRAL -> if (hasMistralKey) null else "Missing Mistral API key for the selected transcription model."
     ProviderId.GROQ -> if (hasGroqKey) null else "Missing Groq API key for the selected transcription model."
     ProviderId.OPENROUTER -> if (hasOpenRouterKey) null else "Missing OpenRouter API key for the selected transcription model."
+    ProviderId.ELEVENLABS -> if (hasElevenLabsKey) null else "Missing ElevenLabs API key for the selected transcription model."
 }
 
 private fun audioDirectMissingKeySummary(
@@ -2103,7 +2154,8 @@ private fun audioDirectMissingKeySummary(
 ): String? = when (config.audioDirectProvider()) {
     ProviderId.MISTRAL -> if (hasMistralKey) null else "Missing Mistral API key for the selected audio direct model."
     ProviderId.OPENROUTER -> if (hasOpenRouterKey) null else "Missing OpenRouter API key for the selected audio direct model."
-    ProviderId.GROQ -> null
+    ProviderId.GROQ,
+    ProviderId.ELEVENLABS -> null
 }
 
 private fun postProcessingModelSummary(config: PipelineConfig, openRouterModels: List<ModelOption>): String {
@@ -2169,6 +2221,7 @@ private fun transcriptionDisplayName(repository: VoiceSlipRepository, config: Pi
 private fun transcriptionEndpoint(config: PipelineConfig): String = when {
     config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO -> "/api/v1/chat/completions"
     config.transcriptionEngine.provider == ProviderId.GROQ -> "/openai/v1/audio/transcriptions"
+    config.transcriptionEngine.provider == ProviderId.ELEVENLABS -> "/v1/speech-to-text"
     config.transcriptionEngine.audioChat -> "/v1/chat/completions"
     else -> "/v1/audio/transcriptions"
 }
@@ -2223,24 +2276,27 @@ private fun LanguagePreservationCard(
 }
 
 @Composable
-private fun ActivePipelineCard(config: PipelineConfig) {
+private fun ActivePipelineCard(repository: VoiceSlipRepository, config: PipelineConfig) {
     SettingsCard {
         Text("Active Pipeline", fontWeight = FontWeight.SemiBold)
         when (config.mode) {
             PipelineMode.PURE_TRANSCRIPTION -> {
                 PipelineDetailRow("Mode", config.mode.label)
                 PipelineDetailRow("Transcription", "${config.transcriptionProvider().label} · ${config.transcriptionModel()}")
+                PipelineDetailRow("Audio", "Records ${repository.recordingFormatForConfig(config).label} automatically")
                 PipelineDetailRow("Output", "Raw transcript")
             }
             PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING -> {
                 PipelineDetailRow("Mode", config.mode.label)
                 PipelineDetailRow("Transcription", "${config.transcriptionProvider().label} · ${config.transcriptionModel()}")
+                PipelineDetailRow("Audio", "Records ${repository.recordingFormatForConfig(config).label} automatically")
                 PipelineDetailRow("Cleanup", "${config.postProcessingProvider.label} · ${config.postProcessingModel.ifBlank { "(select model)" }}")
                 PipelineDetailRow("Style", "Resolved at recording start")
             }
             PipelineMode.AUDIO_DIRECT -> {
                 PipelineDetailRow("Mode", config.mode.label)
                 PipelineDetailRow("Audio direct", "${config.audioDirectProvider().label} · ${config.audioDirectModel()}")
+                PipelineDetailRow("Audio", "Records ${repository.recordingFormatForConfig(config).label} automatically")
                 PipelineDetailRow("Style", "Sent with audio in one call")
             }
         }
@@ -2289,7 +2345,7 @@ private fun DictionaryDuringTranscriptionCard(repository: VoiceSlipRepository, c
                 )
             }
             if (routingEnabled && entries.isEmpty()) {
-                Text("No Dictionary Entries saved yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Off. No Dictionary Entries saved, so no transcription dictionary request is sent.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Text("Cleanup always receives all ${entries.size} Dictionary Entries.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2299,6 +2355,11 @@ private fun DictionaryDuringTranscriptionCard(repository: VoiceSlipRepository, c
 internal fun dictionaryDuringTranscriptionDetail(plan: com.imdinkie.voiceslip.data.DictionaryPromptPlan): String {
     if (!plan.sent) return "Off. Cleanup still receives all ${plan.totalTerms} Dictionary Entries."
     return when (plan.mechanism) {
+        "ElevenLabs keyterms" -> {
+            val base = "Sends ${plan.includedTerms} ElevenLabs keyterms from ${plan.totalTerms} Dictionary Entries. Adds a 20% ElevenLabs STT premium."
+            if (plan.truncated && plan.limit != null) "$base Provider limit: ${plan.limit} keyterms." else base
+        }
+        "ElevenLabs keyterms unavailable" -> "Dictionary keyterms are only available on Scribe v2."
         "Mistral context_bias" -> {
             val base = "Sends ${plan.includedTerms} Mistral Bias Tokens derived from ${plan.totalTerms} Dictionary Entries."
             if (plan.truncated && plan.limit != null) "$base Provider limit: ${plan.limit} Bias Tokens." else base
@@ -2344,7 +2405,7 @@ private fun PipelinePreviewDialog(repository: VoiceSlipRepository, config: Pipel
                             Text("Unavailable in latest refresh", color = MaterialTheme.colorScheme.error)
                         }
                         Text("Endpoint: ${transcriptionEndpoint(config)}")
-                        Text("Audio: WAV, 16 kHz mono")
+                        Text("Audio: records ${repository.recordingFormatForConfig(config).label} automatically")
                         if (config.transcriptionEngineKind == EngineKind.OPENROUTER_AUDIO) {
                             Text("Audio input: base64 input_audio")
                         }
@@ -3433,6 +3494,7 @@ private fun HistoryScreen(
     }
     detailItem?.let { item ->
         HistoryDetailDialog(
+            repository = repository,
             item = item,
             iconCacheKey = item.targetPackage?.let { appIconCache[it]?.iconCacheKey },
             onDismiss = { detailItem = null },
@@ -3547,6 +3609,7 @@ private fun HistoryCard(
 
 @Composable
 private fun HistoryDetailDialog(
+    repository: VoiceSlipRepository,
     item: HistoryItem,
     iconCacheKey: String?,
     onDismiss: () -> Unit,
@@ -3596,6 +3659,18 @@ private fun HistoryDetailDialog(
                     }
                 }
                 item {
+                    val original = File(item.audioPath)
+                    val derivatives = repository.audioDerivativesFor(item)
+                    Text("Audio", fontWeight = FontWeight.SemiBold)
+                    DebugLine("Original", audioFileDetail(original))
+                    derivatives.forEach { derivative ->
+                        DebugLine("Derivative", audioFileDetail(derivative))
+                    }
+                    if (derivatives.isEmpty()) {
+                        Text("No converted derivatives cached.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                item {
                     Text("Debug", fontWeight = FontWeight.SemiBold)
                     if (!iconCacheKey.isNullOrBlank()) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3627,6 +3702,12 @@ private fun HistoryDetailDialog(
 @Composable
 private fun DebugLine(label: String, value: String?) {
     Text("$label: ${value?.takeIf { it.isNotBlank() } ?: ""}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+private fun audioFileDetail(file: File): String {
+    val format = audioFileFormat(file)?.label ?: file.extension.ifBlank { "unknown" }
+    val size = if (file.exists()) "${(file.length() / 1024L).coerceAtLeast(1L)} KB" else "missing"
+    return "${file.name} · $format · $size"
 }
 
 private fun historyContextLine(item: HistoryItem): String? {

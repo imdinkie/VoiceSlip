@@ -98,12 +98,12 @@ internal fun initialAudioModelPickerState(role: AudioModelPickerRole, config: Pi
 internal fun selectedAudioModelId(config: PipelineConfig, role: AudioModelPickerRole, provider: ProviderId): String =
     when (role) {
         AudioModelPickerRole.TRANSCRIPTION -> when (provider) {
-            ProviderId.MISTRAL, ProviderId.GROQ -> config.transcriptionEngine.takeIf { it.provider == provider }?.name.orEmpty()
+            ProviderId.MISTRAL, ProviderId.GROQ, ProviderId.ELEVENLABS -> config.transcriptionEngine.takeIf { it.provider == provider }?.name.orEmpty()
             ProviderId.OPENROUTER -> config.openRouterAudioTranscriptionModel
         }
         AudioModelPickerRole.AUDIO_DIRECT -> when (provider) {
             ProviderId.MISTRAL -> config.audioDirectEngine.takeIf { it.provider == provider }?.name.orEmpty()
-            ProviderId.GROQ -> ""
+            ProviderId.GROQ, ProviderId.ELEVENLABS -> ""
             ProviderId.OPENROUTER -> config.openRouterAudioDirectModel
         }
     }
@@ -113,11 +113,12 @@ internal fun savedAudioModelId(config: PipelineConfig, role: AudioModelPickerRol
         AudioModelPickerRole.TRANSCRIPTION -> when (provider) {
             ProviderId.MISTRAL -> config.mistralTranscriptionEngine?.name.orEmpty()
             ProviderId.GROQ -> config.groqTranscriptionEngine?.name.orEmpty()
+            ProviderId.ELEVENLABS -> config.elevenLabsTranscriptionEngine?.name.orEmpty()
             ProviderId.OPENROUTER -> config.openRouterAudioTranscriptionModel
         }
         AudioModelPickerRole.AUDIO_DIRECT -> when (provider) {
             ProviderId.MISTRAL -> config.mistralAudioDirectEngine?.name.orEmpty()
-            ProviderId.GROQ -> ""
+            ProviderId.GROQ, ProviderId.ELEVENLABS -> ""
             ProviderId.OPENROUTER -> config.openRouterAudioDirectModel
         }
     }
@@ -167,7 +168,7 @@ private fun selectTranscriptionModel(
     reasoningEffort: OpenRouterReasoningEffort
 ): PipelineConfig =
     when (provider) {
-        ProviderId.MISTRAL, ProviderId.GROQ -> {
+        ProviderId.MISTRAL, ProviderId.GROQ, ProviderId.ELEVENLABS -> {
             val engine = TranscriptionEngineId.entries.firstOrNull { it.name == modelId } ?: return config
             val rememberedConfig = config.rememberActiveTranscriptionModel()
             when (provider) {
@@ -180,6 +181,11 @@ private fun selectTranscriptionModel(
                     transcriptionEngineKind = EngineKind.BUILT_IN,
                     transcriptionEngine = engine,
                     groqTranscriptionEngine = engine
+                )
+                ProviderId.ELEVENLABS -> rememberedConfig.copy(
+                    transcriptionEngineKind = EngineKind.BUILT_IN,
+                    transcriptionEngine = engine,
+                    elevenLabsTranscriptionEngine = engine
                 )
                 ProviderId.OPENROUTER -> rememberedConfig
             }
@@ -206,7 +212,8 @@ private fun selectAudioDirectModel(
                 mistralAudioDirectEngine = engine
             )
         }
-        ProviderId.GROQ -> config.rememberActiveAudioDirectModel()
+        ProviderId.GROQ,
+        ProviderId.ELEVENLABS -> config.rememberActiveAudioDirectModel()
         ProviderId.OPENROUTER -> config.rememberActiveAudioDirectModel().copy(
             audioDirectEngineKind = EngineKind.OPENROUTER_AUDIO,
             openRouterAudioDirectModel = modelId,
@@ -219,6 +226,7 @@ private fun PipelineConfig.rememberActiveTranscriptionModel(): PipelineConfig {
     return when (transcriptionEngine.provider) {
         ProviderId.MISTRAL -> if (mistralTranscriptionEngine == null) copy(mistralTranscriptionEngine = transcriptionEngine) else this
         ProviderId.GROQ -> if (groqTranscriptionEngine == null) copy(groqTranscriptionEngine = transcriptionEngine) else this
+        ProviderId.ELEVENLABS -> if (elevenLabsTranscriptionEngine == null) copy(elevenLabsTranscriptionEngine = transcriptionEngine) else this
         ProviderId.OPENROUTER -> this
     }
 }
@@ -228,6 +236,7 @@ private fun PipelineConfig.rememberActiveAudioDirectModel(): PipelineConfig {
     return when (audioDirectEngine.provider) {
         ProviderId.MISTRAL -> if (mistralAudioDirectEngine == null) copy(mistralAudioDirectEngine = audioDirectEngine) else this
         ProviderId.GROQ,
+        ProviderId.ELEVENLABS,
         ProviderId.OPENROUTER -> this
     }
 }
@@ -236,6 +245,7 @@ private fun transcriptionEngineRole(engine: TranscriptionEngineId): String =
     when {
         engine.audioChat -> "audio chat -> raw transcript"
         engine.provider == ProviderId.GROQ -> "speech-to-text endpoint"
+        engine.provider == ProviderId.ELEVENLABS -> if (engine == TranscriptionEngineId.ELEVENLABS_SCRIBE_V2) "from \$0.22/hr · keyterms +20% · M4A" else "from \$0.22/hr · no keyterms · M4A"
         else -> "transcription endpoint"
     }
 

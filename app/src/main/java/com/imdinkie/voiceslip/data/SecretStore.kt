@@ -88,4 +88,5 @@ private fun ProviderId.prefPrefix(): String = when (this) {
     ProviderId.MISTRAL -> "mistral_key"
     ProviderId.GROQ -> "groq_key"
     ProviderId.OPENROUTER -> "openrouter_key"
+    ProviderId.ELEVENLABS -> "elevenlabs_key"
 }
