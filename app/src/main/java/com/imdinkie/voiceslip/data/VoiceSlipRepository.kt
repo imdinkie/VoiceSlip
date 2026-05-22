@@ -7,6 +7,9 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import com.imdinkie.voiceslip.audio.AudioFileFormat
+import com.imdinkie.voiceslip.audio.derivedAudioFile
+import com.imdinkie.voiceslip.audio.recordingFormatFor
 import com.imdinkie.voiceslip.net.mistralContextBiasTerms
 import org.json.JSONArray
 import org.json.JSONObject
@@ -165,12 +168,12 @@ class VoiceSlipRepository(context: Context) {
     fun upsertHistory(item: HistoryItem) = dao.upsertHistory(item.toEntity())
 
     fun deleteHistory(id: String) {
-        listHistory().firstOrNull { it.id == id }?.let { runCatching { File(it.audioPath).delete() } }
+        listHistory().firstOrNull { it.id == id }?.let { deleteAudioWithDerivatives(File(it.audioPath)) }
         dao.deleteHistory(id)
     }
 
     fun clearHistory() {
-        listHistory().forEach { runCatching { File(it.audioPath).delete() } }
+        listHistory().forEach { deleteAudioWithDerivatives(File(it.audioPath)) }
         dao.clearHistory()
     }
 
@@ -183,9 +186,32 @@ class VoiceSlipRepository(context: Context) {
     fun cleanupOrphanedRecordings() {
         cleanupOrphanedRecordingFiles(
             recordingsDir = recordingsDir,
-            retainedAudioPaths = listHistory().map { it.audioPath }.toSet()
+            retainedAudioPaths = listHistory().flatMap { retainedAudioPaths(File(it.audioPath)) }.toSet()
         )
     }
+
+    fun audioDerivativesFor(item: HistoryItem): List<File> {
+        val original = File(item.audioPath)
+        return AudioFileFormat.entries.map { derivedAudioFile(original, it) }.filter { it.exists() && it.isFile }
+    }
+
+    fun recordingFormatForConfig(config: PipelineConfig): AudioFileFormat =
+        if (audioFormatOverride(config) == AudioFileFormat.WAV) AudioFileFormat.WAV else recordingFormatFor(config)
+
+    fun rememberWavForAudioConsumer(config: PipelineConfig) {
+        prefs.edit().putString("${KEY_AUDIO_FORMAT_OVERRIDE_PREFIX}${audioConsumerKey(config)}", AudioFileFormat.WAV.name).apply()
+    }
+
+    private fun deleteAudioWithDerivatives(original: File) {
+        retainedAudioPaths(original).map(::File).forEach { runCatching { it.delete() } }
+    }
+
+    private fun retainedAudioPaths(original: File): List<String> =
+        listOf(original.absolutePath) + AudioFileFormat.entries.map { derivedAudioFile(original, it).absolutePath }
+
+    private fun audioFormatOverride(config: PipelineConfig): AudioFileFormat? =
+        prefs.getString("${KEY_AUDIO_FORMAT_OVERRIDE_PREFIX}${audioConsumerKey(config)}", null)
+            ?.let { runCatching { AudioFileFormat.valueOf(it) }.getOrNull() }
 
     fun listStyles(): List<VoiceStyle> = dao.listStyles().map { it.toVoiceStyle() }
     fun getStyle(id: String): VoiceStyle = dao.getStyle(id)?.toVoiceStyle() ?: dao.getStyle(STYLE_CASUAL)!!.toVoiceStyle()
@@ -556,6 +582,9 @@ private const val KEY_OPENROUTER_POST_PROCESSING_FAVORITES = "openrouter_post_pr
 private const val KEY_OPENROUTER_PROVIDER_SORT = "openrouter_provider_sort"
 private const val KEY_OPENROUTER_ENDPOINT_DETAILS = "openrouter_endpoint_details"
 private const val KEY_PRESERVE_SPOKEN_LANGUAGE = "preserve_spoken_language"
+private const val KEY_AUDIO_FORMAT_OVERRIDE_PREFIX = "audio_format_override:"
+private const val ELEVENLABS_KEYTERM_LIMIT = 1000
+private const val ELEVENLABS_KEYTERM_MAX_LENGTH = 50
 const val OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID = "OPENROUTER_AUDIO_TRANSCRIPTION"
 
 private fun Drawable.toBitmap(width: Int, height: Int): Bitmap {
@@ -592,6 +621,17 @@ internal fun dictionaryPlanForBuiltInTranscription(
     }
     return when {
         engine.provider == ProviderId.GROQ -> groqDictionaryPrompt(terms)
+        engine.provider == ProviderId.ELEVENLABS && engine == TranscriptionEngineId.ELEVENLABS_SCRIBE_V2 ->
+            DictionaryPromptPlan(
+                sent = true,
+                mechanism = "ElevenLabs keyterms",
+                prompt = terms.filter { it.length < ELEVENLABS_KEYTERM_MAX_LENGTH }.take(ELEVENLABS_KEYTERM_LIMIT).joinToString("\n"),
+                includedTerms = terms.filter { it.length < ELEVENLABS_KEYTERM_MAX_LENGTH }.take(ELEVENLABS_KEYTERM_LIMIT).size,
+                totalTerms = terms.size,
+                limit = ELEVENLABS_KEYTERM_LIMIT
+            )
+        engine.provider == ProviderId.ELEVENLABS ->
+            DictionaryPromptPlan(false, "ElevenLabs keyterms unavailable", null, 0, terms.size)
         engine.provider == ProviderId.MISTRAL && engine.audioChat ->
             promptSpellingConstraintsPlan("Prompt spelling constraints", terms)
         else -> {
@@ -624,6 +664,13 @@ private fun promptSpellingConstraintsPlan(mechanism: String, terms: List<String>
         includedTerms = terms.size,
         totalTerms = terms.size
     )
+
+private fun audioConsumerKey(config: PipelineConfig): String =
+    when (config.mode) {
+        PipelineMode.AUDIO_DIRECT -> "direct:${config.audioDirectProvider().name}:${config.audioDirectModel()}"
+        PipelineMode.PURE_TRANSCRIPTION,
+        PipelineMode.TRANSCRIPTION_PLUS_POST_PROCESSING -> "transcription:${config.transcriptionProvider().name}:${config.transcriptionModel()}"
+    }
 
 private const val MISTRAL_CONTEXT_BIAS_TOKEN_LIMIT = 100
 
@@ -731,6 +778,7 @@ private fun PipelineConfig.toEntity(): PipelineConfigEntity = PipelineConfigEnti
     transcriptionEngine = transcriptionEngine.name,
     mistralTranscriptionEngine = mistralTranscriptionEngine?.name.orEmpty(),
     groqTranscriptionEngine = groqTranscriptionEngine?.name.orEmpty(),
+    elevenLabsTranscriptionEngine = elevenLabsTranscriptionEngine?.name.orEmpty(),
     openRouterAudioTranscriptionModel = openRouterAudioTranscriptionModel,
     openRouterAudioTranscriptionReasoningEffort = openRouterAudioTranscriptionReasoningEffort.name,
     audioDirectEngineKind = audioDirectEngineKind.name,
@@ -754,6 +802,7 @@ private fun PipelineConfigEntity.toPipelineConfig(): PipelineConfig {
         transcriptionEngine = enumValue(transcriptionEngine, TranscriptionEngineId.MISTRAL_VOXTRAL_MINI_TRANSCRIBE),
         mistralTranscriptionEngine = enumValueOrNull<TranscriptionEngineId>(mistralTranscriptionEngine),
         groqTranscriptionEngine = enumValueOrNull<TranscriptionEngineId>(groqTranscriptionEngine),
+        elevenLabsTranscriptionEngine = enumValueOrNull<TranscriptionEngineId>(elevenLabsTranscriptionEngine),
         openRouterAudioTranscriptionModel = openRouterAudioTranscriptionModel,
         openRouterAudioTranscriptionReasoningEffort = enumValue(openRouterAudioTranscriptionReasoningEffort, OpenRouterReasoningEffort.NONE),
         audioDirectEngineKind = enumValue(audioDirectEngineKind, EngineKind.BUILT_IN),

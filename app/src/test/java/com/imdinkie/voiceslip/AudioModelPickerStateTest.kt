@@ -67,6 +67,16 @@ class AudioModelPickerStateTest {
     }
 
     @Test
+    fun elevenLabsTranscriptionSelectionStoresProviderMemory() {
+        val selected = AudioModelPickerState(AudioModelPickerRole.TRANSCRIPTION, ProviderId.ELEVENLABS)
+            .selectModel(PipelineConfig(), TranscriptionEngineId.ELEVENLABS_SCRIBE_V2.name)
+
+        assertEquals(EngineKind.BUILT_IN, selected.transcriptionEngineKind)
+        assertEquals(TranscriptionEngineId.ELEVENLABS_SCRIBE_V2, selected.transcriptionEngine)
+        assertEquals(TranscriptionEngineId.ELEVENLABS_SCRIBE_V2, selected.elevenLabsTranscriptionEngine)
+    }
+
+    @Test
     fun switchingAwayFromActiveBuiltInTranscriptionBackfillsProviderMemory() {
         val config = PipelineConfig(
             transcriptionEngineKind = EngineKind.BUILT_IN,

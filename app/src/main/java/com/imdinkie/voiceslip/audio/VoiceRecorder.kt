@@ -6,6 +6,7 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import androidx.annotation.RequiresPermission
 import java.io.File
 import java.io.RandomAccessFile
@@ -16,6 +17,7 @@ import kotlin.math.max
 
 class VoiceRecorder(private val context: Context) {
     private var recorder: AudioRecord? = null
+    private var mediaRecorder: MediaRecorder? = null
     private var outputFile: File? = null
     private var recordingThread: Thread? = null
     private val recording = AtomicBoolean(false)
@@ -27,12 +29,20 @@ class VoiceRecorder(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    fun start(file: File) {
+    fun start(file: File, format: AudioFileFormat = AudioFileFormat.WAV) {
         stopInternal(deleteFile = true)
         outputFile = file
         startedAtMillis = System.currentTimeMillis()
         peakAmplitude.set(0)
+        when (format) {
+            AudioFileFormat.WAV -> startWav(file)
+            AudioFileFormat.M4A -> startM4a(file)
+        }
+    }
 
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startWav(file: File) {
         val minBuffer = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
@@ -63,7 +73,29 @@ class VoiceRecorder(private val context: Context) {
         }
     }
 
-    fun maxAmplitude(): Int = peakAmplitude.getAndSet(0)
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startM4a(file: File) {
+        val current = if (Build.VERSION.SDK_INT >= 31) {
+            MediaRecorder(context)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }
+        current.setAudioSource(MediaRecorder.AudioSource.MIC)
+        current.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+        current.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+        current.setAudioSamplingRate(M4A_SAMPLE_RATE)
+        current.setAudioEncodingBitRate(M4A_BIT_RATE)
+        current.setAudioChannels(CHANNELS)
+        current.setOutputFile(file.absolutePath)
+        current.prepare()
+        current.start()
+        mediaRecorder = current
+        recording.set(true)
+    }
+
+    fun maxAmplitude(): Int = mediaRecorder?.let { runCatching { it.maxAmplitude }.getOrDefault(0) } ?: peakAmplitude.getAndSet(0)
 
     fun stop(): RecordingResult? {
         val file = outputFile ?: return null
@@ -104,9 +136,14 @@ class VoiceRecorder(private val context: Context) {
     private fun stopInternal(deleteFile: Boolean) {
         recording.set(false)
         val current = recorder
+        val currentMedia = mediaRecorder
         recorder = null
+        mediaRecorder = null
         runCatching { current?.stop() }
         runCatching { current?.release() }
+        runCatching { currentMedia?.stop() }
+        runCatching { currentMedia?.reset() }
+        runCatching { currentMedia?.release() }
         runCatching { recordingThread?.join(1500) }
         recordingThread = null
         if (deleteFile) outputFile?.delete()
@@ -141,6 +178,8 @@ class VoiceRecorder(private val context: Context) {
 
     private companion object {
         const val SAMPLE_RATE = 16_000
+        const val M4A_SAMPLE_RATE = 44_100
+        const val M4A_BIT_RATE = 64_000
         const val CHANNELS = 1
         const val BYTES_PER_SAMPLE = 2
         const val WAV_HEADER_BYTES = 44

@@ -18,7 +18,8 @@ const val BUBBLE_OPACITY_MAX_PERCENT = 100
 enum class ProviderId(val label: String) {
     MISTRAL("Mistral"),
     GROQ("Groq"),
-    OPENROUTER("OpenRouter")
+    OPENROUTER("OpenRouter"),
+    ELEVENLABS("ElevenLabs")
 }
 
 enum class PipelineMode(val label: String) {
@@ -100,6 +101,16 @@ enum class TranscriptionEngineId(
         "Groq Whisper Large V3 Turbo",
         ProviderId.GROQ,
         "whisper-large-v3-turbo"
+    ),
+    ELEVENLABS_SCRIBE_V2(
+        "ElevenLabs Scribe v2",
+        ProviderId.ELEVENLABS,
+        "scribe_v2"
+    ),
+    ELEVENLABS_SCRIBE_V1(
+        "ElevenLabs Scribe v1",
+        ProviderId.ELEVENLABS,
+        "scribe_v1"
     )
 }
 
@@ -126,6 +137,7 @@ data class PipelineConfig(
     val transcriptionEngine: TranscriptionEngineId = TranscriptionEngineId.MISTRAL_VOXTRAL_MINI_TRANSCRIBE,
     val mistralTranscriptionEngine: TranscriptionEngineId? = null,
     val groqTranscriptionEngine: TranscriptionEngineId? = null,
+    val elevenLabsTranscriptionEngine: TranscriptionEngineId? = null,
     val openRouterAudioTranscriptionModel: String = "",
     val openRouterAudioTranscriptionReasoningEffort: OpenRouterReasoningEffort = OpenRouterReasoningEffort.NONE,
     val audioDirectEngineKind: EngineKind = EngineKind.BUILT_IN,

@@ -36,6 +36,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import com.imdinkie.voiceslip.audio.VoiceRecorder
+import com.imdinkie.voiceslip.audio.audioFileFormat
 import com.imdinkie.voiceslip.data.HistoryItem
 import com.imdinkie.voiceslip.data.PipelineConfig
 import com.imdinkie.voiceslip.data.PipelineMode
@@ -424,9 +425,10 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             return
         }
         val id = UUID.randomUUID().toString()
-        val file = File(repository.recordingsDir, "$id.wav")
+        val recordingFormat = repository.recordingFormatForConfig(config)
+        val file = File(repository.recordingsDir, "$id.${recordingFormat.extension}")
         runCatching {
-            recorder.start(file)
+            recorder.start(file, recordingFormat)
             haptic()
             recordingStartedAt = System.currentTimeMillis()
             currentConfigSnapshot = config
@@ -441,7 +443,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 status = RecordingStatus.RECORDING,
                 pipelineMode = config.mode.name,
                 stylePreset = styleResolution.styleName,
-                pipelineSummary = pipelineSummary(config),
+                pipelineSummary = "${pipelineSummary(config)} · ${recordingFormat.label}",
                 targetPackage = styleResolution.targetPackage,
                 targetAppLabel = styleResolution.targetAppLabel,
                 resolvedCategoryId = styleResolution.categoryId,
@@ -605,6 +607,9 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     dictionaryRoutingSnapshot = repository.dictionaryRoutingSnapshot(config, dictionary)
                 )
             }.getOrElse { error ->
+                if (audioFileFormat(result.file)?.name == "M4A" && isAudioFormatFailure(error)) {
+                    repository.rememberWavForAudioConsumer(currentConfigSnapshot ?: repository.getPipelineConfig())
+                }
                 item.copy(
                     status = RecordingStatus.FAILED,
                     error = error.message ?: error::class.java.simpleName,
@@ -817,6 +822,11 @@ private fun HistoryItem.withPipelineResult(result: PipelineResult, config: Pipel
     pipelineSummary = result.pipelineSummary,
     metadataJson = result.metadataJson
 )
+
+private fun isAudioFormatFailure(error: Throwable): Boolean {
+    val message = error.message.orEmpty().lowercase()
+    return listOf("audio format", "invalid audio", "failed to load audio", "valid mp3 or wav", "unsupported format").any { it in message }
+}
 
 private fun <T> Handler.postAndWait(block: () -> T): T {
     if (Looper.myLooper() == Looper.getMainLooper()) return block()

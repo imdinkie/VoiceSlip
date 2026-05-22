@@ -137,6 +137,7 @@ class PipelineExecutor(
                 }
             }
             ProviderId.GROQ -> GroqClient().transcribe(key, audioFile, engine.model, dictionaryTerms)
+            ProviderId.ELEVENLABS -> ElevenLabsClient().transcribe(key, audioFile, engine.model, dictionaryTerms)
             ProviderId.OPENROUTER -> throw PipelineException("configuration", "OpenRouter is not a transcription provider in V2.5.")
         }
         if (result.text.isBlank()) throw PipelineException("transcription", "The transcription result was empty.")

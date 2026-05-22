@@ -87,6 +87,8 @@ data class PipelineConfigEntity(
     @ColumnInfo(defaultValue = "''")
     val groqTranscriptionEngine: String,
     @ColumnInfo(defaultValue = "''")
+    val elevenLabsTranscriptionEngine: String,
+    @ColumnInfo(defaultValue = "''")
     val openRouterAudioTranscriptionModel: String,
     @ColumnInfo(defaultValue = "'NONE'")
     val openRouterAudioTranscriptionReasoningEffort: String,
@@ -266,7 +268,7 @@ interface VoiceSlipDao {
         EngineDictionaryRoutingEntity::class,
         PromptSettingEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class VoiceSlipDatabase : RoomDatabase() {
@@ -282,7 +284,7 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                     VoiceSlipDatabase::class.java,
                     "voiceslip_v3.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_5, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_5, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .allowMainThreadQueries()
                     .build()
                     .also { instance = it }
@@ -426,6 +428,12 @@ abstract class VoiceSlipDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterAudioTranscriptionReasoningEffort TEXT NOT NULL DEFAULT 'NONE'")
                 db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterPostProcessingReasoningEffort TEXT NOT NULL DEFAULT 'NONE'")
                 db.execSQL("ALTER TABLE pipeline_config ADD COLUMN openRouterAudioDirectReasoningEffort TEXT NOT NULL DEFAULT 'NONE'")
+            }
+        }
+
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pipeline_config ADD COLUMN elevenLabsTranscriptionEngine TEXT NOT NULL DEFAULT ''")
             }
         }
     }

@@ -52,4 +52,30 @@ class DictionaryPlanningTest {
         assertEquals(0, plan.includedTerms)
         assertEquals(1, plan.totalTerms)
     }
+
+    @Test
+    fun elevenLabsScribeV2UsesKeytermsWhenDictionaryEnabled() {
+        val plan = dictionaryPlanForBuiltInTranscription(
+            TranscriptionEngineId.ELEVENLABS_SCRIBE_V2,
+            listOf("VoiceSlip"),
+            enabled = true
+        )
+
+        assertTrue(plan.sent)
+        assertEquals("ElevenLabs keyterms", plan.mechanism)
+        assertEquals(1, plan.includedTerms)
+        assertEquals(1000, plan.limit)
+    }
+
+    @Test
+    fun elevenLabsScribeV1DoesNotUseKeyterms() {
+        val plan = dictionaryPlanForBuiltInTranscription(
+            TranscriptionEngineId.ELEVENLABS_SCRIBE_V1,
+            listOf("VoiceSlip"),
+            enabled = true
+        )
+
+        assertFalse(plan.sent)
+        assertEquals("ElevenLabs keyterms unavailable", plan.mechanism)
+    }
 }
