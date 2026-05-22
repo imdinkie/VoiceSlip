@@ -140,7 +140,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         if (!hasInputMethodWindow()) return false
         val activePackage = activeApplicationPackage()
         if (activePackage == packageName) return false
-        val node = findFocusedEditableNode()
+        val node = findEditableInsertionTarget()
         val secretField = (node != null && isSensitiveNode(node)) || inputMethodIsSensitiveEditor()
         return shouldShowBubbleForField(secretField = secretField)
     }
@@ -154,7 +154,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isFocused
         }?.root?.packageName?.toString()
         val activeRootPackage = rootInActiveWindow?.packageName?.toString()
-        val editableNodePackage = findFocusedEditableNode()?.packageName?.toString()
+        val editableNodePackage = findEditableInsertionTarget()?.packageName?.toString()
         val inputEditorPackage = inputMethodTargetPackageName()
         return resolveTargetAppPackage(
             focusedWindowPackage = focusedWindowPackage,
@@ -165,20 +165,40 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun findFocusedEditableNode(): AccessibilityNodeInfo? {
+    private fun findEditableInsertionTarget(): AccessibilityNodeInfo? {
         val root = rootInActiveWindow ?: return null
         return root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { isEditableNode(it) }
-            ?: findEditableNode(root)
+            ?: findFocusedEditableNode(root)
+            ?: findSoleEditableNode(root)
     }
 
-    private fun findEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    private fun findFocusedEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         if (node.isFocused && isEditableNode(node)) return node
         for (index in 0 until node.childCount) {
             val child = node.getChild(index) ?: continue
-            val found = findEditableNode(child)
+            val found = findFocusedEditableNode(child)
             if (found != null) return found
         }
         return null
+    }
+
+    private fun findSoleEditableNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val editableNodes = mutableListOf<AccessibilityNodeInfo>()
+        collectEditableNodes(root, editableNodes, limit = 2)
+        return editableNodes.singleOrNull()
+    }
+
+    private fun collectEditableNodes(node: AccessibilityNodeInfo, editableNodes: MutableList<AccessibilityNodeInfo>, limit: Int) {
+        if (editableNodes.size >= limit) return
+        if (isEditableNode(node)) {
+            editableNodes += node
+            return
+        }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            collectEditableNodes(child, editableNodes, limit)
+            if (editableNodes.size >= limit) return
+        }
     }
 
     private fun isEditableNode(node: AccessibilityNodeInfo): Boolean {
@@ -631,7 +651,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 
     private fun insertOrCopy(text: String): InsertionResult {
-        val node = findFocusedEditableNode()
+        val node = findEditableInsertionTarget()
         if (node != null && isSensitiveNode(node)) {
             Log.d(TAG, "Insertion blocked: sensitive accessibility node")
             return InsertionResult.FAILED_SENSITIVE_FIELD
@@ -643,33 +663,23 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             return InsertionResult.FAILED_SENSITIVE_FIELD
         }
 
-        val tryInputMethodFirst = shouldTryAccessibilityInputMethodBeforeFocusedNode(node != null)
-        if (tryInputMethodFirst) {
-            if (commitViaInputMethod(inputMethod, text)) {
-                Log.d(TAG, "Insertion attempted via accessibility input method")
-                return InsertionResult.INSERTED_VIA_INPUT_METHOD
-            }
-        }
-
         if (node != null) {
             if (insertDirectly(node, text)) {
                 Log.d(TAG, "Insertion succeeded via ACTION_SET_TEXT")
                 return InsertionResult.INSERTED_DIRECT
             }
-
-            if (node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-                copyToClipboard(text)
-                if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-                    Log.d(TAG, "Insertion succeeded via clipboard paste fallback")
-                    return InsertionResult.INSERTED_VIA_CLIPBOARD
-                }
-            }
         }
 
-        if (!tryInputMethodFirst) {
-            if (commitViaInputMethod(inputMethod, text)) {
-                Log.d(TAG, "Insertion attempted via accessibility input method")
-                return InsertionResult.INSERTED_VIA_INPUT_METHOD
+        if (commitViaInputMethod(inputMethod, text)) {
+            Log.d(TAG, "Insertion attempted via accessibility input method")
+            return InsertionResult.INSERTED_VIA_INPUT_METHOD
+        }
+
+        if (node != null && node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+            copyToClipboard(text)
+            if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+                Log.d(TAG, "Insertion succeeded via clipboard paste fallback")
+                return InsertionResult.INSERTED_VIA_CLIPBOARD
             }
         }
 
@@ -877,9 +887,6 @@ internal fun shouldBlockInsertionForField(
     secretAccessibilityNode: Boolean,
     secretInputEditor: Boolean
 ): Boolean = secretAccessibilityNode || secretInputEditor
-
-internal fun shouldTryAccessibilityInputMethodBeforeFocusedNode(hasFocusedEditableNode: Boolean): Boolean =
-    !hasFocusedEditableNode
 
 internal fun shouldSetTextWithoutSelection(currentText: String, hintText: String?): Boolean =
     currentText.isEmpty() || currentText == hintText

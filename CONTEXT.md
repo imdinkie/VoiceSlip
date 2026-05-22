@@ -116,6 +116,10 @@ _Avoid_: cleanup rule
 The high-confidence app context that owns the editable field VoiceSlip is recording for.
 _Avoid_: last foreground app when the value is stale or inferred
 
+**Insertion Target**:
+The editable field VoiceSlip chooses for final dictated text after transcription, resolved from input focus or from a single unambiguous editable field on screen.
+_Avoid_: focused field when insertion does not require cursor focus
+
 **Accessibility Setup Status**:
 Whether Android reports the VoiceSlip accessibility service as enabled or the service is connected, independent of whether the bubble is visible in the current app.
 _Avoid_: bubble status
@@ -219,6 +223,8 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - Orphaned recording files that are not referenced by **Retained Dictations** should be cleaned up after they are old enough to avoid active-recording races.
 - Screen-awake behavior belongs to active audio capture, not the later **Submitted Dictation** processing window.
 - A **Target App** may resolve from the focused application window, active root, focused editable node, or input editor package; if none is high-confidence, VoiceSlip should treat it as unknown.
+- An **Insertion Target** prefers the input-focused editable field, but may use the only editable field on screen when no focused editable field is available.
+- VoiceSlip should prefer explicit field replacement when an **Insertion Target** exposes reliable text selection, then keyboard-style input, and use clipboard paste only after those insertion methods fail.
 - **Accessibility Setup Status** does not imply that the bubble is visible, because VoiceSlip may intentionally hide the bubble in its own app or unsuitable fields.
 - A **Secret Field** always prevents VoiceSlip from showing the floating bubble or inserting dictated text.
 - A **Private Editor** does not hide the floating bubble or block insertion by itself.

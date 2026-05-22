@@ -22,16 +22,6 @@ class PrivateEditorPolicyTest {
     }
 
     @Test
-    fun focusedEditableNodeUsesVerifiableInsertionBeforeInputMethod() {
-        assertFalse(shouldTryAccessibilityInputMethodBeforeFocusedNode(hasFocusedEditableNode = true))
-    }
-
-    @Test
-    fun missingFocusedEditableNodeMayUseInputMethodBeforeClipboardFallback() {
-        assertTrue(shouldTryAccessibilityInputMethodBeforeFocusedNode(hasFocusedEditableNode = false))
-    }
-
-    @Test
     fun hintOnlyTextCanUseSetTextWithoutSelection() {
         assertTrue(shouldSetTextWithoutSelection(currentText = "Send chat", hintText = "Send chat"))
     }
