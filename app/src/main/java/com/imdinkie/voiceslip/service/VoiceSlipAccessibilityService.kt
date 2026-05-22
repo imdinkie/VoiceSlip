@@ -683,14 +683,9 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             }
         }
 
-        if (node == null || !hasInputMethodWindow()) {
-            copyToClipboard(text)
-            Log.d(TAG, "Insertion copied to clipboard: no target node or input method window")
-            return InsertionResult.COPIED_NO_TARGET
-        }
-
-        Log.d(TAG, "Insertion failed")
-        return InsertionResult.FAILED_INSERTION
+        copyToClipboard(text)
+        Log.d(TAG, "Insertion copied to clipboard after insertion attempts failed")
+        return InsertionResult.COPIED_NO_TARGET
     }
 
     private fun insertDirectly(node: AccessibilityNodeInfo, text: String): Boolean {
@@ -854,7 +849,7 @@ private enum class InsertionResult(
     INSERTED_DIRECT(null, null),
     INSERTED_VIA_INPUT_METHOD(null, null),
     INSERTED_VIA_CLIPBOARD("Inserted using clipboard paste fallback because direct insertion was unavailable.", "clipboard_fallback"),
-    COPIED_NO_TARGET("Copied to clipboard because no editable field was available.", "no_editable_target"),
+    COPIED_NO_TARGET("Copied to clipboard because automatic insertion was unavailable.", "no_editable_target"),
     FAILED_SENSITIVE_FIELD("Did not insert or copy because the focused field appears sensitive.", "sensitive_field"),
     FAILED_INSERTION("Could not insert into the focused field.", "insertion_failed")
 }
