@@ -89,6 +89,22 @@ class VoiceSlipRepository(context: Context) {
         prefs.edit().putBoolean(KEY_PRESERVE_SPOKEN_LANGUAGE, enabled).apply()
     }
 
+    fun shouldCheckForUpdates(nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val lastCheckedAt = prefs.getLong(KEY_LAST_UPDATE_CHECK_MILLIS, 0L)
+        return nowMillis - lastCheckedAt >= UPDATE_CHECK_INTERVAL_MS
+    }
+
+    fun markUpdateChecked(nowMillis: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong(KEY_LAST_UPDATE_CHECK_MILLIS, nowMillis).apply()
+    }
+
+    fun isReleaseDismissed(tagName: String): Boolean =
+        prefs.getString(KEY_DISMISSED_RELEASE_TAG, null) == tagName
+
+    fun dismissRelease(tagName: String) {
+        prefs.edit().putString(KEY_DISMISSED_RELEASE_TAG, tagName).apply()
+    }
+
     fun getCachedModels(provider: ProviderId): List<ModelOption> {
         val array = JSONArray(prefs.getString("${provider.name.lowercase()}_models", "[]"))
         return (0 until array.length()).mapNotNull { index ->
@@ -545,6 +561,7 @@ data class InstalledAppCacheState(
 )
 
 private const val APP_CACHE_STALE_MS = 24L * 60L * 60L * 1000L
+private const val UPDATE_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L
 private const val KEY_STYLE_DEFAULTS_VERSION = "style_defaults_version"
 private const val STYLE_DEFAULTS_VERSION = 4
 private const val KEY_OPENROUTER_AUDIO_MODELS = "openrouter_audio_models"
@@ -556,6 +573,8 @@ private const val KEY_OPENROUTER_POST_PROCESSING_FAVORITES = "openrouter_post_pr
 private const val KEY_OPENROUTER_PROVIDER_SORT = "openrouter_provider_sort"
 private const val KEY_OPENROUTER_ENDPOINT_DETAILS = "openrouter_endpoint_details"
 private const val KEY_PRESERVE_SPOKEN_LANGUAGE = "preserve_spoken_language"
+private const val KEY_LAST_UPDATE_CHECK_MILLIS = "last_update_check_millis"
+private const val KEY_DISMISSED_RELEASE_TAG = "dismissed_release_tag"
 const val OPENROUTER_AUDIO_TRANSCRIPTION_ROUTING_ID = "OPENROUTER_AUDIO_TRANSCRIPTION"
 
 private fun Drawable.toBitmap(width: Int, height: Int): Bitmap {

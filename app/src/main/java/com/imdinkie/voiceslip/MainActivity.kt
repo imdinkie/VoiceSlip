@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -142,6 +143,8 @@ import com.imdinkie.voiceslip.data.VoiceCategory
 import com.imdinkie.voiceslip.data.VoiceSlipRepository
 import com.imdinkie.voiceslip.data.VoiceStyle
 import com.imdinkie.voiceslip.net.GroqClient
+import com.imdinkie.voiceslip.net.GitHubRelease
+import com.imdinkie.voiceslip.net.GitHubReleasesClient
 import com.imdinkie.voiceslip.net.OpenRouterClient
 import com.imdinkie.voiceslip.net.PipelineException
 import com.imdinkie.voiceslip.net.PipelineExecutor
@@ -151,6 +154,7 @@ import com.imdinkie.voiceslip.net.buildAudioTranscriptionPromptPreview
 import com.imdinkie.voiceslip.net.buildLanguageHintExamples
 import com.imdinkie.voiceslip.net.buildPostProcessingSystemPrompt
 import com.imdinkie.voiceslip.net.buildPostProcessingUserPrompt
+import com.imdinkie.voiceslip.net.isReleaseNewer
 import com.imdinkie.voiceslip.net.outputGuardRejection
 import com.imdinkie.voiceslip.service.VoiceSlipAccessibilityService
 import com.imdinkie.voiceslip.ui.theme.VoiceSlipTheme
@@ -308,6 +312,9 @@ private fun VoiceSlipApp(
     var haptics by remember { mutableStateOf(repository.getHapticsEnabled()) }
     var bubbleSizeDp by remember { mutableIntStateOf(repository.getBubbleSizeDp()) }
     var bubbleOpacityPercent by remember { mutableIntStateOf(repository.getBubbleOpacityPercent()) }
+    var availableRelease by remember { mutableStateOf<GitHubRelease?>(null) }
+    var updateCheckRunning by remember { mutableStateOf(false) }
+    var updateStatus by remember { mutableStateOf<String?>(null) }
     var selectedTab by remember {
         mutableIntStateOf(
             if (initialSetupStatus(context, repository, secretStore).ready) HISTORY_TAB_INDEX else SETUP_TAB_INDEX
@@ -362,6 +369,46 @@ private fun VoiceSlipApp(
             )
         )
     }
+
+    fun checkForUpdates(force: Boolean, reportWhenCurrent: Boolean) {
+        if ((!force && !repository.shouldCheckForUpdates()) || updateCheckRunning) return
+        updateCheckRunning = true
+        if (reportWhenCurrent) updateStatus = "Checking GitHub releases..."
+        Thread {
+            val result = runCatching {
+                val release = GitHubReleasesClient().latestStableRelease()
+                val installedVersion = installedVersionName(context)
+                if (
+                    isReleaseNewer(installedVersion, release.tagName) &&
+                    !repository.isReleaseDismissed(release.tagName)
+                ) {
+                    release
+                } else {
+                    null
+                }
+            }
+            repository.markUpdateChecked()
+            (context as? ComponentActivity)?.runOnUiThread {
+                result.fold(
+                    onSuccess = { release ->
+                        if (release != null) {
+                            availableRelease = release
+                            updateStatus = "Update found: ${release.tagName}"
+                        } else if (reportWhenCurrent) {
+                            updateStatus = "VoiceSlip is up to date."
+                        }
+                    },
+                    onFailure = {
+                        if (reportWhenCurrent) {
+                            updateStatus = it.message ?: "Update check failed. Try again later."
+                        }
+                    }
+                )
+                updateCheckRunning = false
+            }
+        }.start()
+    }
+
     LaunchedEffect(selectedTab, resumeTick) {
         if (selectedTab == HISTORY_TAB_INDEX) {
             val topId = repository.listHistory().firstOrNull()?.id
@@ -370,6 +417,9 @@ private fun VoiceSlipApp(
             }
             lastViewedHistoryTopId = topId
         }
+    }
+    LaunchedEffect(resumeTick) {
+        checkForUpdates(force = false, reportWhenCurrent = false)
     }
 
     fun refreshOpenRouterEndpointDetails(modelIds: List<String>) {
@@ -436,6 +486,8 @@ private fun VoiceSlipApp(
                     bubbleSizeDp = bubbleSizeDp,
                     bubbleOpacityPercent = bubbleOpacityPercent,
                     setupStatus = setupStatus,
+                    updateStatus = updateStatus,
+                    showUpdatePreview = isAppDebuggable(context),
                     onProviderKeyChange = { provider, key ->
                         when (provider) {
                             ProviderId.MISTRAL -> mistralKey = key
@@ -466,6 +518,18 @@ private fun VoiceSlipApp(
                     onRequestMic = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
                     onRequestNotifications = {
                         if (Build.VERSION.SDK_INT >= 33) notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    },
+                    onCheckUpdates = {
+                        checkForUpdates(force = true, reportWhenCurrent = true)
+                    },
+                    onPreviewUpdate = {
+                        updateStatus = "Showing update prompt preview."
+                        availableRelease = GitHubRelease(
+                            tagName = "v999.0.0",
+                            name = "VoiceSlip test release",
+                            htmlUrl = "https://github.com/imdinkie/VoiceSlip/releases",
+                            publishedAt = ""
+                        )
                     }
                 )
                 HISTORY_TAB_INDEX -> HistoryScreen(
@@ -583,6 +647,64 @@ private fun VoiceSlipApp(
             }
         }
     }
+
+    availableRelease?.let { release ->
+        UpdateAvailableDialog(
+            release = release,
+            onOpen = {
+                availableRelease = null
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.htmlUrl)))
+            },
+            onSkip = {
+                repository.dismissRelease(release.tagName)
+                availableRelease = null
+            },
+            onDismiss = {
+                availableRelease = null
+            }
+        )
+    }
+}
+
+private fun installedVersionName(context: Context): String =
+    runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+    }.getOrDefault("")
+
+private fun isAppDebuggable(context: Context): Boolean =
+    context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+
+@Composable
+private fun UpdateAvailableDialog(
+    release: GitHubRelease,
+    onOpen: () -> Unit,
+    onSkip: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Update available") },
+        text = {
+            Text("VoiceSlip ${release.tagName} is available on GitHub.")
+        },
+        confirmButton = {
+            Button(onClick = onOpen) {
+                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Open release")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onSkip) {
+                    Text("Skip this version")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Later")
+                }
+            }
+        }
+    )
 }
 
 private fun initialSetupStatus(
@@ -610,6 +732,8 @@ private fun SetupScreen(
     bubbleSizeDp: Int,
     bubbleOpacityPercent: Int,
     setupStatus: SetupStatus,
+    updateStatus: String?,
+    showUpdatePreview: Boolean,
     onProviderKeyChange: (ProviderId, String) -> Unit,
     onAppEnabledChange: (Boolean) -> Unit,
     onHapticsChange: (Boolean) -> Unit,
@@ -618,7 +742,9 @@ private fun SetupScreen(
     onOpenAccessibility: () -> Unit,
     onOpenOverlay: () -> Unit,
     onRequestMic: () -> Unit,
-    onRequestNotifications: () -> Unit
+    onRequestNotifications: () -> Unit,
+    onCheckUpdates: () -> Unit,
+    onPreviewUpdate: () -> Unit
 ) {
     val context = LocalContext.current
     LazyColumn(
@@ -701,6 +827,34 @@ private fun SetupScreen(
                     action = "Allow",
                     onClick = onRequestNotifications
                 )
+            }
+        }
+
+        item {
+            SectionTitle("Updates")
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("GitHub releases", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Checks stable releases and opens GitHub when a newer version is available.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(onClick = onCheckUpdates) {
+                            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Check now")
+                        }
+                        if (showUpdatePreview) {
+                            OutlinedButton(onClick = onPreviewUpdate) {
+                                Text("Preview prompt")
+                            }
+                        }
+                    }
+                    updateStatus?.let {
+                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
         }
 
