@@ -594,7 +594,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                         dictionaryRoutingSnapshot = repository.dictionaryRoutingSnapshot(config, dictionary)
                     )
                 }
-                val insertionResult = mainHandler.postAndWait { insertOrCopy(text) }
+                val insertionResult = mainHandler.postAndWait { insertOrCopy(item.id, text, style.targetPackage) }
                 item.copy(
                     status = RecordingStatus.SUCCEEDED,
                     transcript = text,
@@ -655,41 +655,105 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }.start()
     }
 
-    private fun insertOrCopy(text: String): InsertionResult {
+    private fun insertOrCopy(dictationId: String, text: String, recordingTargetPackage: String?): InsertionResult {
         val node = findEditableInsertionTarget()
+        val insertionTargetPackage = activeApplicationPackage()
+        val inputMethodTargetPackage = inputMethodTargetPackageName()
         if (node != null && isSensitiveNode(node)) {
-            Log.d(TAG, "Insertion blocked: sensitive accessibility node")
+            logInsertionOutcome(
+                dictationId = dictationId,
+                recordingTargetPackage = recordingTargetPackage,
+                insertionTargetPackage = insertionTargetPackage,
+                inputMethodTargetPackage = inputMethodTargetPackage,
+                node = node,
+                text = text,
+                attempts = "blocked_sensitive_accessibility_node",
+                result = InsertionResult.FAILED_SENSITIVE_FIELD
+            )
             return InsertionResult.FAILED_SENSITIVE_FIELD
         }
 
         val inputMethod = accessibilityInputMethod
         if (inputMethodIsSensitiveEditor()) {
-            Log.d(TAG, "Insertion blocked: sensitive input editor")
+            logInsertionOutcome(
+                dictationId = dictationId,
+                recordingTargetPackage = recordingTargetPackage,
+                insertionTargetPackage = insertionTargetPackage,
+                inputMethodTargetPackage = inputMethodTargetPackage,
+                node = node,
+                text = text,
+                attempts = "blocked_sensitive_input_editor",
+                result = InsertionResult.FAILED_SENSITIVE_FIELD
+            )
             return InsertionResult.FAILED_SENSITIVE_FIELD
         }
 
+        val attempts = mutableListOf<String>()
         if (node != null) {
             if (insertDirectly(node, text)) {
-                Log.d(TAG, "Insertion succeeded via ACTION_SET_TEXT")
+                attempts += "set_text:success"
+                logInsertionOutcome(
+                    dictationId = dictationId,
+                    recordingTargetPackage = recordingTargetPackage,
+                    insertionTargetPackage = insertionTargetPackage,
+                    inputMethodTargetPackage = inputMethodTargetPackage,
+                    node = node,
+                    text = text,
+                    attempts = attempts.joinToString(","),
+                    result = InsertionResult.INSERTED_DIRECT
+                )
                 return InsertionResult.INSERTED_DIRECT
             }
-        }
-
-        if (commitViaInputMethod(inputMethod, text)) {
-            Log.d(TAG, "Insertion attempted via accessibility input method")
-            return InsertionResult.INSERTED_VIA_INPUT_METHOD
+            attempts += "set_text:failed_or_unavailable"
         }
 
         if (node != null && node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE)) {
             copyToClipboard(text)
             if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-                Log.d(TAG, "Insertion succeeded via clipboard paste fallback")
+                attempts += "paste:success"
+                logInsertionOutcome(
+                    dictationId = dictationId,
+                    recordingTargetPackage = recordingTargetPackage,
+                    insertionTargetPackage = insertionTargetPackage,
+                    inputMethodTargetPackage = inputMethodTargetPackage,
+                    node = node,
+                    text = text,
+                    attempts = attempts.joinToString(","),
+                    result = InsertionResult.INSERTED_VIA_CLIPBOARD
+                )
                 return InsertionResult.INSERTED_VIA_CLIPBOARD
             }
+            attempts += "paste:failed"
         }
 
+        val inputMethodResult = commitViaInputMethod(inputMethod, text)
+        if (inputMethodResult.success) {
+            attempts += "commit_text:accepted_unverified"
+            logInsertionOutcome(
+                dictationId = dictationId,
+                recordingTargetPackage = recordingTargetPackage,
+                insertionTargetPackage = insertionTargetPackage,
+                inputMethodTargetPackage = inputMethodTargetPackage,
+                node = node,
+                text = text,
+                attempts = attempts.joinToString(","),
+                result = InsertionResult.INSERTED_VIA_INPUT_METHOD_UNVERIFIED
+            )
+            return InsertionResult.INSERTED_VIA_INPUT_METHOD_UNVERIFIED
+        }
+        attempts += "commit_text:${inputMethodResult.reason}"
+
         copyToClipboard(text)
-        Log.d(TAG, "Insertion copied to clipboard after insertion attempts failed")
+        logInsertionOutcome(
+            dictationId = dictationId,
+            recordingTargetPackage = recordingTargetPackage,
+            insertionTargetPackage = insertionTargetPackage,
+            inputMethodTargetPackage = inputMethodTargetPackage,
+            node = node,
+            text = text,
+            attempts = attempts.joinToString(","),
+            result = InsertionResult.COPIED_NO_TARGET
+        )
         return InsertionResult.COPIED_NO_TARGET
     }
 
@@ -742,21 +806,52 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             false
         }
 
-    private fun commitViaInputMethod(inputMethod: VoiceSlipInputMethod?, text: String): Boolean =
+    private fun commitViaInputMethod(inputMethod: VoiceSlipInputMethod?, text: String): InputMethodCommitResult =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            inputMethod?.commitText(text) == true
+            inputMethod?.commitText(text) ?: InputMethodCommitResult(false, "input_method_unavailable")
         } else {
-            false
+            InputMethodCommitResult(false, "api_below_tiramisu")
         }
 
     private fun insertionToast(errorStage: String?): String? {
         return when (errorStage) {
             null -> null
             "clipboard_fallback" -> null
+            "input_method_unverified" -> "Insertion unverified"
             "no_editable_target" -> "Copied transcription"
             "sensitive_field" -> "Cannot insert into sensitive fields"
             else -> "Could not insert transcription"
         }
+    }
+
+    private fun logInsertionOutcome(
+        dictationId: String,
+        recordingTargetPackage: String?,
+        insertionTargetPackage: String?,
+        inputMethodTargetPackage: String?,
+        node: AccessibilityNodeInfo?,
+        text: String,
+        attempts: String,
+        result: InsertionResult
+    ) {
+        Log.i(
+            TAG,
+            "InsertionOutcome id=${dictationId.take(8)} result=${result.name} stage=${result.errorStage ?: "inserted"} " +
+                "recordingTarget=${recordingTargetPackage.orEmpty()} insertionTarget=${insertionTargetPackage.orEmpty()} " +
+                "inputMethodTarget=${inputMethodTargetPackage.orEmpty()} textLength=${text.length} textHash=${text.hashCode()} " +
+                "node=${node.insertionDebugSummary()} attempts=$attempts"
+        )
+    }
+
+    private fun AccessibilityNodeInfo?.insertionDebugSummary(): String {
+        if (this == null) return "none"
+        val actions = listOfNotNull(
+            "setText".takeIf { supportsAction(AccessibilityNodeInfo.ACTION_SET_TEXT) },
+            "paste".takeIf { supportsAction(AccessibilityNodeInfo.ACTION_PASTE) }
+        ).joinToString("|").ifBlank { "none" }
+        return "pkg=${packageName?.toString().orEmpty()};class=${className?.toString().orEmpty()};viewId=${viewIdResourceName.orEmpty()};" +
+            "editable=$isEditable;focused=$isFocused;enabled=$isEnabled;selection=$textSelectionStart-$textSelectionEnd;" +
+            "textLength=${text?.length ?: 0};actions=$actions"
     }
 
     private fun haptic() {
@@ -857,24 +952,31 @@ private enum class InsertionResult(
     val errorStage: String?
 ) {
     INSERTED_DIRECT(null, null),
-    INSERTED_VIA_INPUT_METHOD(null, null),
+    INSERTED_VIA_INPUT_METHOD_UNVERIFIED("Insertion was attempted through the accessibility input method, but VoiceSlip could not verify that the target editor accepted it.", "input_method_unverified"),
     INSERTED_VIA_CLIPBOARD("Inserted using clipboard paste fallback because direct insertion was unavailable.", "clipboard_fallback"),
     COPIED_NO_TARGET("Copied to clipboard because automatic insertion was unavailable.", "no_editable_target"),
     FAILED_SENSITIVE_FIELD("Did not insert or copy because the focused field appears sensitive.", "sensitive_field"),
     FAILED_INSERTION("Could not insert into the focused field.", "insertion_failed")
 }
 
+private data class InputMethodCommitResult(
+    val success: Boolean,
+    val reason: String
+)
+
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private class VoiceSlipInputMethod(service: VoiceSlipAccessibilityService) : InputMethod(service) {
     fun targetPackageName(): String? = currentInputEditorInfo?.packageName
 
-    fun commitText(text: String): Boolean {
-        if (!currentInputStarted) return false
-        val connection = currentInputConnection ?: return false
+    fun commitText(text: String): InputMethodCommitResult {
+        if (!currentInputStarted) return InputMethodCommitResult(false, "input_not_started")
+        val connection = currentInputConnection ?: return InputMethodCommitResult(false, "connection_unavailable")
         return runCatching {
             connection.commitText(text, 1, null as TextAttribute?)
-            true
-        }.getOrDefault(false)
+            InputMethodCommitResult(true, "accepted_unverified")
+        }.getOrElse {
+            InputMethodCommitResult(false, it::class.java.simpleName)
+        }
     }
 
     fun isSensitiveEditor(): Boolean {
@@ -895,6 +997,27 @@ internal fun shouldBlockInsertionForField(
 
 internal fun shouldSetTextWithoutSelection(currentText: String, hintText: String?): Boolean =
     currentText.isEmpty() || currentText == hintText
+
+internal enum class InsertionAttempt {
+    SET_TEXT,
+    PASTE,
+    COMMIT_TEXT,
+    COPY
+}
+
+internal fun insertionAttemptOrder(
+    hasInsertionTarget: Boolean,
+    supportsSetText: Boolean,
+    supportsPaste: Boolean,
+    canUseInputMethod: Boolean
+): List<InsertionAttempt> {
+    val attempts = mutableListOf<InsertionAttempt>()
+    if (hasInsertionTarget && supportsSetText) attempts += InsertionAttempt.SET_TEXT
+    if (hasInsertionTarget && supportsPaste) attempts += InsertionAttempt.PASTE
+    if (canUseInputMethod) attempts += InsertionAttempt.COMMIT_TEXT
+    attempts += InsertionAttempt.COPY
+    return attempts
+}
 
 internal fun isSecretInputType(inputType: Int): Boolean {
     val textVariation = inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)

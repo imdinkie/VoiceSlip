@@ -120,6 +120,14 @@ _Avoid_: last foreground app when the value is stale or inferred
 The editable field VoiceSlip chooses for final dictated text after transcription, resolved from input focus or from a single unambiguous editable field on screen.
 _Avoid_: focused field when insertion does not require cursor focus
 
+**Insertion Outcome**:
+The result of attempting to place final dictated text into the current **Insertion Target**, distinct from whether the **Dictation Pipeline** produced final text.
+_Avoid_: transcription result when referring to app insertion
+
+**Insertion Warning**:
+A visible note on a successful **Retained Dictation** when final text exists but VoiceSlip could not verify automatic insertion or had to copy instead.
+_Avoid_: transcription failure
+
 **Accessibility Setup Status**:
 Whether Android reports the VoiceSlip accessibility service as enabled or the service is connected, independent of whether the bubble is visible in the current app.
 _Avoid_: bubble status
@@ -216,6 +224,7 @@ _Avoid_: sensitive field when referring to browser address bars or no-personaliz
 - **Push to Talk** should start only after an intentional hold; accidental near-immediate releases should not create a submitted dictation.
 - **Push to Talk** has no explicit cancel control once active; releasing submits unless the recording was below the accidental-hold threshold.
 - A **Submitted Dictation** keeps the floating bubble visible until transcription, cleanup, and insertion or copy have finished.
+- A successful **Dictation Pipeline** can still produce an **Insertion Warning** when the **Insertion Outcome** is copied, blocked, failed, or unverified.
 - A new dictation should be visible at the top of History when VoiceSlip is reopened, even before it becomes a **Retained Dictation**.
 - A canceled or accidental capture is not a **Retained Dictation** and should be removed from History while its recording file is deleted.
 - Once setup is complete, History is the primary review surface for **Retained Dictations** when opening VoiceSlip.

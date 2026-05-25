@@ -32,6 +32,30 @@ class PrivateEditorPolicyTest {
     }
 
     @Test
+    fun pasteIsPreferredBeforeUnverifiedInputMethodCommit() {
+        assertTrue(
+            insertionAttemptOrder(
+                hasInsertionTarget = true,
+                supportsSetText = true,
+                supportsPaste = true,
+                canUseInputMethod = true
+            ).let { it.indexOf(InsertionAttempt.PASTE) < it.indexOf(InsertionAttempt.COMMIT_TEXT) }
+        )
+    }
+
+    @Test
+    fun unverifiedInputMethodCommitRemainsBeforeCopyAsLastInsertionAttempt() {
+        assertTrue(
+            insertionAttemptOrder(
+                hasInsertionTarget = false,
+                supportsSetText = false,
+                supportsPaste = false,
+                canUseInputMethod = true
+            ).let { it == listOf(InsertionAttempt.COMMIT_TEXT, InsertionAttempt.COPY) }
+        )
+    }
+
+    @Test
     fun passwordInputTypeIsSecretButPrivateImeFlagIsNot() {
         assertTrue(isSecretInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD))
         assertFalse(isSecretInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI))
