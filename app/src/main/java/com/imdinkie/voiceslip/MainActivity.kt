@@ -3582,7 +3582,7 @@ private fun HistoryCard(
             item.displayText()?.takeIf { it.isNotBlank() }?.let {
                 Text(it, maxLines = 4, overflow = TextOverflow.Ellipsis)
             }
-            item.error?.takeIf { it.isNotBlank() }?.let {
+            historyWarningText(item)?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
             historyContextLine(item)?.let {
@@ -3652,7 +3652,7 @@ private fun HistoryDetailDialog(
                         )
                     }
                 }
-                item.error?.takeIf { it.isNotBlank() }?.let { error ->
+                historyWarningText(item)?.let { error ->
                     item {
                         Text("Error", fontWeight = FontWeight.SemiBold)
                         Text(error, color = MaterialTheme.colorScheme.error)
@@ -3685,6 +3685,7 @@ private fun HistoryDetailDialog(
                     DebugLine("Pipeline", item.pipelineSummary)
                     DebugLine("Provider/model", providerModelLine(item))
                     DebugLine("Detected language", item.detectedLanguage)
+                    DebugLine("Insertion stage", item.errorStage)
                     DebugLine("Insertion/error", item.error)
                 }
                 item.stylePromptSnapshot?.takeIf { it.isNotBlank() }?.let { prompt ->
@@ -3717,6 +3718,11 @@ private fun historyContextLine(item: HistoryItem): String? {
         item.resolvedStyleName?.takeIf { it.isNotBlank() }
     )
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}
+
+private fun historyWarningText(item: HistoryItem): String? {
+    if (item.errorStage == "input_method_unverified" || item.errorStage == "clipboard_fallback") return null
+    return item.error?.takeIf { it.isNotBlank() }
 }
 
 private fun providerModelLine(item: HistoryItem): String {

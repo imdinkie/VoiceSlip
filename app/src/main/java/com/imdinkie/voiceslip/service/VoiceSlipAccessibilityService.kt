@@ -48,6 +48,7 @@ import com.imdinkie.voiceslip.net.PipelineException
 import com.imdinkie.voiceslip.net.PipelineExecutor
 import com.imdinkie.voiceslip.net.PipelineResult
 import com.imdinkie.voiceslip.net.outputGuardRejection
+import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 import kotlin.math.abs
@@ -594,14 +595,14 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                         dictionaryRoutingSnapshot = repository.dictionaryRoutingSnapshot(config, dictionary)
                     )
                 }
-                val insertionResult = mainHandler.postAndWait { insertOrCopy(item.id, text, style.targetPackage) }
+                val insertionOutcome = mainHandler.postAndWait { insertOrCopy(item.id, text, style.targetPackage) }
                 item.copy(
                     status = RecordingStatus.SUCCEEDED,
                     transcript = text,
                     rawTranscript = pipeline.rawTranscript,
                     finalText = pipeline.finalText,
                     detectedLanguage = pipeline.detectedLanguage,
-                    error = insertionResult.historyNote,
+                    error = insertionOutcome.result.historyNote,
                     provider = pipeline.provider,
                     model = pipeline.model,
                     pipelineMode = config.mode.name,
@@ -613,8 +614,8 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     postProcessingModel = pipeline.postProcessingModel,
                     stylePreset = pipeline.stylePreset,
                     pipelineSummary = pipeline.pipelineSummary,
-                    errorStage = insertionResult.errorStage,
-                    metadataJson = pipeline.metadataJson,
+                    errorStage = insertionOutcome.result.errorStage,
+                    metadataJson = appendMetadataLine(pipeline.metadataJson, insertionOutcome.metadataJson),
                     targetPackage = style.targetPackage,
                     targetAppLabel = style.targetAppLabel,
                     resolvedCategoryId = style.categoryId,
@@ -655,12 +656,12 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         }.start()
     }
 
-    private fun insertOrCopy(dictationId: String, text: String, recordingTargetPackage: String?): InsertionResult {
+    private fun insertOrCopy(dictationId: String, text: String, recordingTargetPackage: String?): InsertionOutcome {
         val node = findEditableInsertionTarget()
         val insertionTargetPackage = activeApplicationPackage()
         val inputMethodTargetPackage = inputMethodTargetPackageName()
         if (node != null && isSensitiveNode(node)) {
-            logInsertionOutcome(
+            return insertionOutcome(
                 dictationId = dictationId,
                 recordingTargetPackage = recordingTargetPackage,
                 insertionTargetPackage = insertionTargetPackage,
@@ -670,12 +671,11 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 attempts = "blocked_sensitive_accessibility_node",
                 result = InsertionResult.FAILED_SENSITIVE_FIELD
             )
-            return InsertionResult.FAILED_SENSITIVE_FIELD
         }
 
         val inputMethod = accessibilityInputMethod
         if (inputMethodIsSensitiveEditor()) {
-            logInsertionOutcome(
+            return insertionOutcome(
                 dictationId = dictationId,
                 recordingTargetPackage = recordingTargetPackage,
                 insertionTargetPackage = insertionTargetPackage,
@@ -685,14 +685,13 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 attempts = "blocked_sensitive_input_editor",
                 result = InsertionResult.FAILED_SENSITIVE_FIELD
             )
-            return InsertionResult.FAILED_SENSITIVE_FIELD
         }
 
         val attempts = mutableListOf<String>()
         if (node != null) {
             if (insertDirectly(node, text)) {
                 attempts += "set_text:success"
-                logInsertionOutcome(
+                return insertionOutcome(
                     dictationId = dictationId,
                     recordingTargetPackage = recordingTargetPackage,
                     insertionTargetPackage = insertionTargetPackage,
@@ -702,7 +701,6 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     attempts = attempts.joinToString(","),
                     result = InsertionResult.INSERTED_DIRECT
                 )
-                return InsertionResult.INSERTED_DIRECT
             }
             attempts += "set_text:failed_or_unavailable"
         }
@@ -711,7 +709,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             copyToClipboard(text)
             if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
                 attempts += "paste:success"
-                logInsertionOutcome(
+                return insertionOutcome(
                     dictationId = dictationId,
                     recordingTargetPackage = recordingTargetPackage,
                     insertionTargetPackage = insertionTargetPackage,
@@ -721,7 +719,6 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                     attempts = attempts.joinToString(","),
                     result = InsertionResult.INSERTED_VIA_CLIPBOARD
                 )
-                return InsertionResult.INSERTED_VIA_CLIPBOARD
             }
             attempts += "paste:failed"
         }
@@ -729,7 +726,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         val inputMethodResult = commitViaInputMethod(inputMethod, text)
         if (inputMethodResult.success) {
             attempts += "commit_text:accepted_unverified"
-            logInsertionOutcome(
+            return insertionOutcome(
                 dictationId = dictationId,
                 recordingTargetPackage = recordingTargetPackage,
                 insertionTargetPackage = insertionTargetPackage,
@@ -739,12 +736,11 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 attempts = attempts.joinToString(","),
                 result = InsertionResult.INSERTED_VIA_INPUT_METHOD_UNVERIFIED
             )
-            return InsertionResult.INSERTED_VIA_INPUT_METHOD_UNVERIFIED
         }
         attempts += "commit_text:${inputMethodResult.reason}"
 
         copyToClipboard(text)
-        logInsertionOutcome(
+        return insertionOutcome(
             dictationId = dictationId,
             recordingTargetPackage = recordingTargetPackage,
             insertionTargetPackage = insertionTargetPackage,
@@ -754,7 +750,6 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
             attempts = attempts.joinToString(","),
             result = InsertionResult.COPIED_NO_TARGET
         )
-        return InsertionResult.COPIED_NO_TARGET
     }
 
     private fun insertDirectly(node: AccessibilityNodeInfo, text: String): Boolean {
@@ -817,14 +812,13 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         return when (errorStage) {
             null -> null
             "clipboard_fallback" -> null
-            "input_method_unverified" -> "Insertion unverified"
             "no_editable_target" -> "Copied transcription"
             "sensitive_field" -> "Cannot insert into sensitive fields"
             else -> "Could not insert transcription"
         }
     }
 
-    private fun logInsertionOutcome(
+    private fun insertionOutcome(
         dictationId: String,
         recordingTargetPackage: String?,
         insertionTargetPackage: String?,
@@ -833,7 +827,19 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
         text: String,
         attempts: String,
         result: InsertionResult
-    ) {
+    ): InsertionOutcome {
+        val metadata = JSONObject()
+            .put("type", "insertion")
+            .put("result", result.name)
+            .put("stage", result.errorStage ?: "inserted")
+            .put("recordingTargetPackage", recordingTargetPackage.orEmpty())
+            .put("insertionTargetPackage", insertionTargetPackage.orEmpty())
+            .put("inputMethodTargetPackage", inputMethodTargetPackage.orEmpty())
+            .put("textLength", text.length)
+            .put("textHash", text.hashCode())
+            .put("node", node.insertionDebugSummary())
+            .put("attempts", attempts)
+            .toString()
         Log.i(
             TAG,
             "InsertionOutcome id=${dictationId.take(8)} result=${result.name} stage=${result.errorStage ?: "inserted"} " +
@@ -841,6 +847,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
                 "inputMethodTarget=${inputMethodTargetPackage.orEmpty()} textLength=${text.length} textHash=${text.hashCode()} " +
                 "node=${node.insertionDebugSummary()} attempts=$attempts"
         )
+        return InsertionOutcome(result, metadata)
     }
 
     private fun AccessibilityNodeInfo?.insertionDebugSummary(): String {
@@ -928,6 +935,9 @@ private fun isAudioFormatFailure(error: Throwable): Boolean {
     return listOf("audio format", "invalid audio", "failed to load audio", "valid mp3 or wav", "unsupported format").any { it in message }
 }
 
+private fun appendMetadataLine(existing: String?, addition: String): String =
+    listOfNotNull(existing?.takeIf { it.isNotBlank() }, addition).joinToString("\n")
+
 private fun <T> Handler.postAndWait(block: () -> T): T {
     if (Looper.myLooper() == Looper.getMainLooper()) return block()
     val lock = Object()
@@ -952,12 +962,17 @@ private enum class InsertionResult(
     val errorStage: String?
 ) {
     INSERTED_DIRECT(null, null),
-    INSERTED_VIA_INPUT_METHOD_UNVERIFIED("Insertion was attempted through the accessibility input method, but VoiceSlip could not verify that the target editor accepted it.", "input_method_unverified"),
-    INSERTED_VIA_CLIPBOARD("Inserted using clipboard paste fallback because direct insertion was unavailable.", "clipboard_fallback"),
+    INSERTED_VIA_INPUT_METHOD_UNVERIFIED(null, "input_method_unverified"),
+    INSERTED_VIA_CLIPBOARD(null, "clipboard_fallback"),
     COPIED_NO_TARGET("Copied to clipboard because automatic insertion was unavailable.", "no_editable_target"),
     FAILED_SENSITIVE_FIELD("Did not insert or copy because the focused field appears sensitive.", "sensitive_field"),
     FAILED_INSERTION("Could not insert into the focused field.", "insertion_failed")
 }
+
+private data class InsertionOutcome(
+    val result: InsertionResult,
+    val metadataJson: String
+)
 
 private data class InputMethodCommitResult(
     val success: Boolean,
