@@ -274,9 +274,37 @@ internal fun modelRows(
             isAvailable = model != null,
             detail = model?.compactModelDetail(fallbackProvider) ?: id
         )
-        row.takeIf { cleanQuery.isBlank() || it.id.contains(cleanQuery, true) || it.name.contains(cleanQuery, true) }
+        val isPinnedSelected = !favoritesOnly && selectedId?.takeIf { it.isNotBlank() } == id
+        row.takeIf { isPinnedSelected || modelRowMatchesQuery(it, cleanQuery) }
     }
 }
+
+internal fun modelRowMatchesQuery(row: ModelDisplayRow, query: String): Boolean {
+    val tokens = query.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+    if (tokens.isEmpty()) return true
+    val targets = listOf(row.name, row.id, row.provider, row.detail).filter { it.isNotBlank() }
+    return tokens.all { token -> targets.any { it.matchesFuzzyToken(token) } }
+}
+
+private fun String.matchesFuzzyToken(token: String): Boolean {
+    if (contains(token, ignoreCase = true)) return true
+    val target = searchNormalized()
+    val needle = token.searchNormalized()
+    if (needle.isBlank()) return true
+    if (target.contains(needle)) return true
+    if (needle.length < 2) return false
+    var index = 0
+    for (char in target) {
+        if (char == needle[index]) {
+            index++
+            if (index == needle.length) return true
+        }
+    }
+    return false
+}
+
+private fun String.searchNormalized(): String =
+    lowercase().filter { it.isLetterOrDigit() }
 
 private fun ModelOption.compactModelDetail(fallbackProvider: String): String {
     val metadata = listOfNotNull(

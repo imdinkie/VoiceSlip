@@ -110,4 +110,14 @@ class LanguagePromptsTest {
         assertTrue(systemPrompt.contains("Convert spoken punctuation contextually"))
         assertTrue(systemPrompt.contains("Preserve punctuation words"))
     }
+
+    @Test
+    fun defaultCleanupPolicyUsesNoticeablyMoreParagraphBreaks() {
+        val prompt = DEFAULT_CLEANUP_POLICY
+
+        assertTrue(prompt.contains("Use paragraph breaks readily"))
+        assertTrue(prompt.contains("changes subject"))
+        assertTrue(prompt.contains("Keep tightly related sentences together"))
+        assertFalse(prompt.contains("Use conservative paragraph breaks"))
+    }
 }

@@ -96,6 +96,52 @@ class PostProcessingModelPickerStateTest {
     }
 
     @Test
+    fun modelRowsSupportFuzzySearchAcrossNameAndId() {
+        val rows = modelRows(
+            models = listOf(
+                ModelOption(id = "google/gemini-flash-1.5", name = "Gemini Flash 1.5"),
+                ModelOption(id = "openai/gpt-4o-mini", name = "GPT-4o Mini"),
+                ModelOption(id = "anthropic/claude-haiku", name = "Claude Haiku")
+            ),
+            favoriteIds = emptyList(),
+            selectedId = "",
+            query = "gmn fls",
+            fallbackProvider = "OpenRouter"
+        )
+
+        assertEquals(listOf("google/gemini-flash-1.5"), rows.map { it.id })
+
+        val idRows = modelRows(
+            models = listOf(
+                ModelOption(id = "openai/gpt-4o-mini", name = "GPT-4o Mini"),
+                ModelOption(id = "anthropic/claude-haiku", name = "Claude Haiku")
+            ),
+            favoriteIds = emptyList(),
+            selectedId = "",
+            query = "gpt4o",
+            fallbackProvider = "OpenRouter"
+        )
+
+        assertEquals(listOf("openai/gpt-4o-mini"), idRows.map { it.id })
+    }
+
+    @Test
+    fun selectedModelRemainsVisibleWhenSearchDoesNotMatch() {
+        val rows = modelRows(
+            models = listOf(
+                ModelOption(id = "provider/selected-model", name = "Selected Model"),
+                ModelOption(id = "provider/matching-model", name = "Matching Model")
+            ),
+            favoriteIds = emptyList(),
+            selectedId = "provider/selected-model",
+            query = "matching",
+            fallbackProvider = "OpenRouter"
+        )
+
+        assertEquals(listOf("provider/selected-model", "provider/matching-model"), rows.map { it.id })
+    }
+
+    @Test
     fun modelRowsPreferCompactPriceMetadataOverRawId() {
         val rows = modelRows(
             models = listOf(
