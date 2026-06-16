@@ -126,6 +126,56 @@ class PostProcessingModelPickerStateTest {
     }
 
     @Test
+    fun exactSearchResultsSuppressFuzzyFallback() {
+        val rows = modelRows(
+            models = listOf(
+                ModelOption(id = "google/gemini-flash", name = "Gemini Flash"),
+                ModelOption(id = "provider/efficient-large", name = "Great Efficient Model")
+            ),
+            favoriteIds = emptyList(),
+            selectedId = "",
+            query = "gem",
+            fallbackProvider = "OpenRouter"
+        )
+
+        assertEquals(listOf("google/gemini-flash"), rows.map { it.id })
+    }
+
+    @Test
+    fun shortQueriesDoNotRunFuzzyFallback() {
+        val rows = modelRows(
+            models = listOf(
+                ModelOption(id = "provider/efficient-large", name = "Great Efficient Model")
+            ),
+            favoriteIds = emptyList(),
+            selectedId = "",
+            query = "gm",
+            fallbackProvider = "OpenRouter"
+        )
+
+        assertEquals(emptyList<String>(), rows.map { it.id })
+    }
+
+    @Test
+    fun fuzzyFallbackIsCappedForLargeCatalogs() {
+        val models = (1..150).map {
+            ModelOption(id = "provider/efficient-large-$it", name = "Great Efficient Model $it")
+        }
+
+        val rows = modelRows(
+            models = models,
+            favoriteIds = emptyList(),
+            selectedId = "",
+            query = "gem",
+            fallbackProvider = "OpenRouter"
+        )
+
+        assertEquals(100, rows.size)
+        assertEquals("provider/efficient-large-1", rows.first().id)
+        assertEquals("provider/efficient-large-100", rows.last().id)
+    }
+
+    @Test
     fun selectedModelRemainsVisibleWhenSearchDoesNotMatch() {
         val rows = modelRows(
             models = listOf(

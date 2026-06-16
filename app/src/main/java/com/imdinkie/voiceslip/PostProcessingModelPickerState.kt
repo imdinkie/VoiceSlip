@@ -265,36 +265,69 @@ internal fun modelRows(
         models.map { it.id }.forEach { if (it !in orderedIds) orderedIds += it }
     }
     val cleanQuery = query.trim()
-    return orderedIds.mapNotNull { id ->
+    val rows = orderedIds.map { id ->
         val model = cachedById[id]
-        val row = ModelDisplayRow(
+        ModelDisplayRow(
             id = id,
             name = model?.name ?: id,
             provider = model?.provider?.takeIf { it.isNotBlank() } ?: fallbackProvider,
             isAvailable = model != null,
             detail = model?.compactModelDetail(fallbackProvider) ?: id
         )
-        val isPinnedSelected = !favoritesOnly && selectedId?.takeIf { it.isNotBlank() } == id
-        row.takeIf { isPinnedSelected || modelRowMatchesQuery(it, cleanQuery) }
     }
+    if (cleanQuery.isBlank()) return rows
+
+    val pinnedSelectedId = selectedId?.takeIf { it.isNotBlank() && !favoritesOnly }
+    val pinnedRows = rows.filter { it.id == pinnedSelectedId }
+    val candidateRows = rows.filterNot { it.id == pinnedSelectedId }
+    val exactRows = candidateRows.filter { it.matchesExactQuery(cleanQuery) }
+    if (exactRows.isNotEmpty()) return pinnedRows + exactRows
+    if (!shouldRunFuzzySearch(cleanQuery)) return pinnedRows
+    return pinnedRows + candidateRows.asSequence()
+        .filter { it.matchesFuzzyQuery(cleanQuery) }
+        .take(FUZZY_RESULT_LIMIT)
+        .toList()
 }
 
 internal fun modelRowMatchesQuery(row: ModelDisplayRow, query: String): Boolean {
-    val tokens = query.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+    val cleanQuery = query.trim()
+    if (cleanQuery.isBlank()) return true
+    return row.matchesExactQuery(cleanQuery) || shouldRunFuzzySearch(cleanQuery) && row.matchesFuzzyQuery(cleanQuery)
+}
+
+private fun ModelDisplayRow.matchesExactQuery(query: String): Boolean =
+    searchableTargets().any { it.contains(query, ignoreCase = true) }
+
+private fun ModelDisplayRow.matchesFuzzyQuery(query: String): Boolean {
+    val tokens = query.split(Regex("\\s+")).filter { it.isNotBlank() }
     if (tokens.isEmpty()) return true
-    val targets = listOf(row.name, row.id, row.provider, row.detail).filter { it.isNotBlank() }
+    val targets = searchableTargets().map { SearchTarget(raw = it, normalized = it.searchNormalized()) }
     return tokens.all { token -> targets.any { it.matchesFuzzyToken(token) } }
 }
 
-private fun String.matchesFuzzyToken(token: String): Boolean {
-    if (contains(token, ignoreCase = true)) return true
-    val target = searchNormalized()
-    val needle = token.searchNormalized()
+private fun ModelDisplayRow.searchableTargets(): List<String> =
+    listOf(name, id, provider, detail).filter { it.isNotBlank() }
+
+private fun shouldRunFuzzySearch(query: String): Boolean =
+    query.searchNormalized().length >= FUZZY_QUERY_MIN_NORMALIZED_LENGTH
+
+private data class SearchTarget(
+    val raw: String,
+    val normalized: String
+) {
+    fun matchesFuzzyToken(token: String): Boolean {
+        if (raw.contains(token, ignoreCase = true)) return true
+        val needle = token.searchNormalized()
+        return normalized.fuzzyContains(needle)
+    }
+}
+
+private fun String.fuzzyContains(needle: String): Boolean {
     if (needle.isBlank()) return true
-    if (target.contains(needle)) return true
+    if (contains(needle)) return true
     if (needle.length < 2) return false
     var index = 0
-    for (char in target) {
+    for (char in this) {
         if (char == needle[index]) {
             index++
             if (index == needle.length) return true
@@ -305,6 +338,9 @@ private fun String.matchesFuzzyToken(token: String): Boolean {
 
 private fun String.searchNormalized(): String =
     lowercase().filter { it.isLetterOrDigit() }
+
+private const val FUZZY_QUERY_MIN_NORMALIZED_LENGTH = 3
+private const val FUZZY_RESULT_LIMIT = 100
 
 private fun ModelOption.compactModelDetail(fallbackProvider: String): String {
     val metadata = listOfNotNull(
