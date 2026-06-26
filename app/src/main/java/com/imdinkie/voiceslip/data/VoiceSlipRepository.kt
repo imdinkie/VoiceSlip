@@ -17,7 +17,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 
-class VoiceSlipRepository(context: Context) {
+class VoiceSlipRepository(context: Context, runStartupMaintenance: Boolean = true) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("voiceslip_store", Context.MODE_PRIVATE)
     private val dao = VoiceSlipDatabase.get(appContext).dao()
@@ -26,6 +26,11 @@ class VoiceSlipRepository(context: Context) {
     private val appIconDir: File = File(appContext.filesDir, "app_icons").apply { mkdirs() }
 
     init {
+        if (runStartupMaintenance) runStartupMaintenance()
+    }
+
+    @Synchronized
+    fun runStartupMaintenance() {
         seedOpenRouterAudioFavorites()
         seedDefaults()
         cleanupCanceledHistory()

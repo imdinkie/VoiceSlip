@@ -74,24 +74,38 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     private var compactAnchorX = -1
     private var compactAnchorY = -1
     private var accessibilityInputMethod: VoiceSlipInputMethod? = null
+    @Volatile private var startupReady = false
+
+    private val startupRefreshRunnable = Runnable {
+        if (startupReady) refreshOverlayVisibility()
+    }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
         windowManager = getSystemService(WindowManager::class.java)
-        repository = VoiceSlipRepository(this)
+        repository = VoiceSlipRepository(this, runStartupMaintenance = false)
         secretStore = SecretStore(this)
         recorder = VoiceRecorder(this)
+        Thread({
+            runCatching { repository.runStartupMaintenance() }
+                .onFailure { Log.w(TAG, "Repository startup maintenance failed", it) }
+            startupReady = true
+            mainHandler.post {
+                if (instance === this) refreshOverlayVisibility()
+            }
+        }, "VoiceSlipRepositoryStartup").start()
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        refreshOverlayVisibility()
+        mainHandler.postDelayed(startupRefreshRunnable, SERVICE_STARTUP_REFRESH_DELAY_MS)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacks(startupRefreshRunnable)
         recorder.cancel()
         hideOverlay()
         if (instance === this) instance = null
@@ -108,6 +122,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!startupReady) return
         if (event?.packageName == packageName) {
             if (activeApplicationPackage() == packageName) {
                 refreshOverlayVisibility()
@@ -124,6 +139,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     }
 
     fun refreshFromSettings() {
+        if (!startupReady) return
         refreshOverlayVisibility()
     }
 
@@ -892,6 +908,7 @@ class VoiceSlipAccessibilityService : AccessibilityService() {
     companion object {
         private const val MAX_RECORDING_MS = 5 * 60 * 1000L
         private const val MIN_PUSH_TO_TALK_RECORDING_MS = 800L
+        private const val SERVICE_STARTUP_REFRESH_DELAY_MS = 500L
         private const val TAG = "VoiceSlip"
         var instance: VoiceSlipAccessibilityService? = null
             private set
